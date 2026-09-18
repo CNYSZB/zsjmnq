@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <link rel="icon" type="image/png" href="icon.png?v=1">
+  <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#04070c">
@@ -403,7 +404,7 @@
   <button id="btn-settings" class="ghost">设 置</button>
   <button id="btn-donate" class="ghost">捐 赠</button>
 </div>
-  <div class="corner">5.5</div>
+  <div class="corner">5.6</div>
 </div>
 
 <div id="settings">
@@ -909,10 +910,11 @@ const FX = (() => {
           gl_FragColor = vec4(vC, t.a * vA);
         }`,
       transparent: true,
-      depthWrite: false,
-      blending: blending,
-      vertexColors: false
-    });
+  depthWrite: false,
+  depthTest: false,
+  blending: blending,
+  vertexColors: false
+});
     const points = new THREE.Points(geo, mat);
     points.frustumCulled = false;
     points.renderOrder = 500;
@@ -5952,20 +5954,26 @@ function startPlacing(mode) {
 
 /* 探照灯开关 */
 const btnSearch = document.getElementById('btn-search');
+let searchLightOn = false;
 function refreshSearchLightBtn() {
   if (!btnSearch) return;
   const hasLight = AC && AC.searchLight;
-  btnSearch.textContent = '探照灯：' + (settings.searchLight ? '开' : '关');
-  btnSearch.classList.toggle('on', settings.searchLight);
+  btnSearch.textContent = '探照灯：' + (searchLightOn ? '开' : '关');
+  btnSearch.classList.toggle('on', searchLightOn);
   btnSearch.style.opacity = hasLight ? '1' : '0.4';
+  if (AC && AC.searchLight) {
+    AC.searchLight.visible = searchLightOn;
+    AC.searchLight.intensity = searchLightOn ? 10.0 : 0;
+  }
 }
-if (btnSearch) btnSearch.addEventListener('click', () => {
-  if (!AC || !AC.searchLight) { toast('当前机型没有探照灯', 1.4, true); return; }
-  settings.searchLight = !settings.searchLight;
-  AC.searchLight.visible = settings.searchLight;
-  refreshSearchLightBtn();
-  toast(settings.searchLight ? '探照灯已开启' : '探照灯已关闭', 1.4);
-});
+if (btnSearch) {
+  btnSearch.onclick = function () {
+    if (!AC || !AC.searchLight) { toast('当前机型没有探照灯', 1.4, true); return; }
+    searchLightOn = !searchLightOn;
+    refreshSearchLightBtn();
+    toast(searchLightOn ? '探照灯已开启' : '探照灯已关闭', 1.4);
+  };
+}
 
 /* ===================== 合成音效（无外部文件） ===================== */
 const gunAudio = {
