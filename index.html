@@ -6532,12 +6532,6 @@ if (window.__HELI) {
     initAudio();
     if (audio && audio.ctx.state === 'suspended') { try { await audio.ctx.resume(); } catch (e) {} }
     enterGame();
-    try {
-      const e = document.documentElement;
-      if (e.requestFullscreen) await e.requestFullscreen({ navigationUI: 'hide' });
-      else if (e.webkitRequestFullscreen) e.webkitRequestFullscreen();
-      if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
-    } catch (e) {}
     startRound();
   };
   window.__HELI.onHangar = () => openHangar();
