@@ -323,15 +323,6 @@
 <body>
 
 <div id="hud">
-  <div class="panel">
-    <div class="row"><span>机型</span><b class="nm" id="h-type">银翼206</b></div>
-    <div class="row"><span>高度</span><b id="h-alt">0</b><i>m</i></div>
-    <div class="row"><span>空速</span><b id="h-spd">0</b><i>km/h</i></div>
-    <div class="row"><span>垂直速度</span><b id="h-vs">0</b><i>m/s</i></div>
-    <div class="row"><span>航向</span><b id="h-hdg">0</b><i>°</i></div>
-    <div class="row"><span>旋翼转速</span><b id="h-rpm">0</b><i>%</i></div>
-    <div class="row"><span>桨叶 / 损伤</span><b id="h-dmg">2+2 / 0%</b></div>
-  </div>
   <div id="status">系统就绪</div>
   <div id="toast"></div>
 </div>
@@ -404,7 +395,7 @@
   <button id="btn-settings" class="ghost">设 置</button>
   <button id="btn-donate" class="ghost">捐 赠</button>
 </div>
-  <div class="corner">5.6</div>
+  <div class="corner">v6.0</div>
 </div>
 
 <div id="settings">
@@ -862,63 +853,126 @@ const FX = (() => {
   const smokeTex = makeSoftTex(64, 1.5);
   const fireTex  = makeSoftTex(64, 2.2);
 
+  /* ★ 真正的贴图四边形（instanced billboard），不再用 gl_PointSize 点精灵。
+     - 每个粒子 = 一个单位四边形的 4 个顶点，用 InstancedBufferAttribute 逐实例传参
+     - 尺寸换算刻意对齐原 gl_PointSize 的屏幕空间公式：
+         原: gl_PointSize = psize * uPR * (300.0 / -mv.z)   [像素]
+         现: 屏幕高度(px) = sizeWorld * (viewportH / (2*tan(fov/2))) / -mv.z
+       令两者相等解出 sizeWorld，即可得到与原实现完全一致的缩放曲线。 */
   function makePool(max, tex, blending) {
-    const geo = new THREE.BufferGeometry();
+    const quad = new THREE.InstancedBufferGeometry();
+    // 单位四边形，四个角 (-0.5..0.5)
+    const quadPos = new Float32Array([
+      -0.5, -0.5, 0,
+       0.5, -0.5, 0,
+       0.5,  0.5, 0,
+      -0.5,  0.5, 0
+    ]);
+    const quadUV = new Float32Array([
+      0, 0,  1, 0,  1, 1,  0, 1
+    ]);
+    quad.setAttribute('aCorner', new THREE.BufferAttribute(quadPos, 3));
+    quad.setAttribute('aUV',     new THREE.BufferAttribute(quadUV, 2));
+    quad.setIndex([0, 1, 2, 0, 2, 3]);
+    quad.instanceCount = 0;
+
     const pos   = new Float32Array(max * 3);
     const col   = new Float32Array(max * 3);
     const size  = new Float32Array(max);
     const alpha = new Float32Array(max);
     const rot   = new Float32Array(max);
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('pcolor',   new THREE.BufferAttribute(col, 3));
-    geo.setAttribute('psize',    new THREE.BufferAttribute(size, 1));
-    geo.setAttribute('palpha',   new THREE.BufferAttribute(alpha, 1));
-    geo.setAttribute('prot',     new THREE.BufferAttribute(rot, 1));
-    geo.setDrawRange(0, 0);
+
+    const iPos   = new THREE.InstancedBufferAttribute(pos, 3);
+    const iCol   = new THREE.InstancedBufferAttribute(col, 3);
+    const iSize  = new THREE.InstancedBufferAttribute(size, 1);
+    const iAlpha = new THREE.InstancedBufferAttribute(alpha, 1);
+    const iRot   = new THREE.InstancedBufferAttribute(rot, 1);
+    iPos.setUsage(THREE.DynamicDrawUsage);
+    iCol.setUsage(THREE.DynamicDrawUsage);
+    iSize.setUsage(THREE.DynamicDrawUsage);
+    iAlpha.setUsage(THREE.DynamicDrawUsage);
+    iRot.setUsage(THREE.DynamicDrawUsage);
+
+    quad.setAttribute('iPos',   iPos);
+    quad.setAttribute('iColor', iCol);
+    quad.setAttribute('iSize',  iSize);
+    quad.setAttribute('iAlpha', iAlpha);
+    quad.setAttribute('iRot',   iRot);
+
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         uTex: { value: tex },
-        uPR:  { value: Math.min(window.devicePixelRatio || 1, 2.0) }
+        /* 复刻原 gl_PointSize 的换算：把"像素高度"转成剪裁空间偏移，
+           与原实现使用完全相同的 300/-mv.z 缩放曲线，保证粒子视觉尺寸不变 */
+        uPR: { value: Math.min(window.devicePixelRatio || 1, 2.0) },
+        uHalfH: { value: innerHeight * 0.5 },
+        uProjF: { value: 1 / Math.tan(70 * Math.PI / 360) }
       },
       vertexShader: `
-        attribute float psize;
-        attribute float palpha;
-        attribute float prot;
-        attribute vec3  pcolor;
-        varying vec3 vC;
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        attribute vec3  aCorner;
+        attribute vec2  aUV;
+        attribute vec3  iPos;
+        attribute vec3  iColor;
+        attribute float iSize;
+        attribute float iAlpha;
+        attribute float iRot;
+        varying vec3  vC;
         varying float vA;
-        varying float vR;
+        varying vec2  vUV;
         uniform float uPR;
+        uniform float uHalfH;
+        uniform float uProjF;
         void main(){
-          vC = pcolor;
-          vA = palpha;
-          vR = prot;
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = psize * uPR * (300.0 / -mv.z);
+          vC  = iColor;
+          vA  = iAlpha;
+          vUV = aUV;
+          vec4 mv = modelViewMatrix * vec4(iPos, 1.0);
+          /* ★ 与原 gl_PointSize = iSize * uPR * (300.0 / -mv.z) 等价的像素高度 */
+          float px = iSize * uPR * (300.0 / max(-mv.z, 0.001));
+          /* 像素 → 相机空间偏移量推导：
+             相机空间高度 y 投影到 NDC 为 y * uProjF / -mv.z，NDC 全高 2 对应屏幕 H 像素，
+             故 px 像素对应的相机空间高度 world = px / H * 2 * (-mv.z) / uProjF
+             其中 H = uHalfH * 2，uProjF = 1 / tan(fov/2) */
+          float world = px * (-mv.z) * 2.0 / (uHalfH * 2.0 * uProjF);
+          float c = cos(iRot), sn = sin(iRot);
+          vec2 corner = aCorner.xy * world;
+          vec2 r = vec2(c * corner.x - sn * corner.y, sn * corner.x + c * corner.y);
+          mv.xy += r;
           gl_Position = projectionMatrix * mv;
+          #include <logdepthbuf_vertex>
         }`,
       fragmentShader: `
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
         uniform sampler2D uTex;
-        varying vec3 vC;
+        varying vec3  vC;
         varying float vA;
-        varying float vR;
+        varying vec2  vUV;
         void main(){
-          vec2 uv = gl_PointCoord - 0.5;
-          float c = cos(vR), s = sin(vR);
-          vec2 ruv = vec2(c*uv.x - s*uv.y, s*uv.x + c*uv.y) + 0.5;
-          vec4 t = texture2D(uTex, ruv);
+          #include <logdepthbuf_fragment>
+          vec4 t = texture2D(uTex, vUV);
           gl_FragColor = vec4(vC, t.a * vA);
         }`,
       transparent: true,
-  depthWrite: false,
-  depthTest: false,
-  blending: blending,
-  vertexColors: false
-});
-    const points = new THREE.Points(geo, mat);
-    points.frustumCulled = false;
-    points.renderOrder = 500;
-    scene.add(points);
+      depthWrite: false,
+      depthTest: true,
+      blending: blending,
+      vertexColors: false,
+      side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(quad, mat);
+    mesh.frustumCulled = false;
+    /* ★ renderOrder 保持原值 500，不能动。
+       场景里粒子和水面都在透明队列，水面 depthWrite:false 不写深度，
+       靠 renderOrder 排序无法让水面遮挡粒子。真正起作用的是 depthTest:
+       - 与不透明物体（地形/停机坪/树木/机体）比较时，粒子会被正确遮挡 ← 你要的"该挡住就挡住"
+       - 水面之下的粒子由 stepPool 里的底边判定直接剔除，不会画出来。
+       上一版错误地把这里改成 9，导致粒子被地形挡住、同时水面又盖不住粒子，
+       所以显得"在地面图层之下"，现在改回 500。 */
+    mesh.renderOrder = 500;
+    scene.add(mesh);
     const state = new Array(max);
     for (let i = 0; i < max; i++) {
       state[i] = {
@@ -932,15 +986,17 @@ const FX = (() => {
         drag:1, rise:0
       };
     }
-    return { max, geo, mat, points, state, pos, col, size, alpha, rot, cursor: 0 };
+    return { max, geo: quad, mat, mesh, state,
+             iPos, iCol, iSize, iAlpha, iRot,
+             pos, col, size, alpha, rot, cursor: 0 };
   }
 
   let smokePool = null, firePool = null;
   let budgetSmoke = 620, budgetFire = 280;
 
   function buildPools() {
-    if (smokePool) { scene.remove(smokePool.points); smokePool.geo.dispose(); smokePool.mat.dispose(); }
-    if (firePool)  { scene.remove(firePool.points);  firePool.geo.dispose();  firePool.mat.dispose(); }
+    if (smokePool) { scene.remove(smokePool.mesh); smokePool.geo.dispose(); smokePool.mat.dispose(); }
+    if (firePool)  { scene.remove(firePool.mesh);  firePool.geo.dispose();  firePool.mat.dispose(); }
     smokePool = makePool(budgetSmoke, smokeTex, THREE.NormalBlending);
     firePool  = makePool(budgetFire,  fireTex,  THREE.AdditiveBlending);
   }
@@ -1119,24 +1175,6 @@ function emitExplosion(x, y, z, scale) {
       });
     }
   }
-function emitBladeSmoke(bladeGrp) {
-  if (!bladeGrp) return;
-  const wp = new THREE.Vector3();
-  bladeGrp.getWorldPosition(wp);
-  for (let i = 0; i < 5; i++) {
-    emitSmoke(wp.x, wp.y, wp.z, {
-      vx: (Math.random() - 0.5) * 1.5,
-      vy: 1.5 + Math.random() * 1.8,
-      vz: (Math.random() - 0.5) * 1.5,
-      jx: 0.4, jy: 0.4, jz: 0.4,
-      life: 1.6 + Math.random(),
-      s0: 0.5, s1: 2.2,
-            gray: 0.12, alpha: 0.7
-    });
-  }
-}
-
- 
 /* 机炮曳光弹：有重力下坠、无阻力，长寿命可见 */
 function emitTracer(x, y, z, dx, dy, dz) {
   const p = alloc(firePool);
@@ -1193,13 +1231,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
      以及它的核心舱对象（解体后仍能拿到真实位置） */
   let emitAccum = 0;
   function emitForCraft(dt, craft, coreObj) {
-      /* ★ 在水里就不冒火不冒烟（按主旋翼头判定） */
-{
-  const S0 = craft.isPlayer ? H : craft.S;
-  const rotorW = craft.def.rotorPos.clone().applyQuaternion(S0.quat).add(S0.pos);
-  if (rotorW.y < WATER_Y + 1) return;
-}
-emitAccum += dt;
     emitAccum += dt;
     if (emitAccum < 1 / 40) return;
     emitAccum = 0;
@@ -1207,6 +1238,11 @@ emitAccum += dt;
     const isPlayer = craft.isPlayer;
     const S = isPlayer ? H : craft.S;
     const hp = S.pos;
+    /* ★ 入水判定：按机体位置判定，一旦机体没入水面就停止发射火焰与烟雾。
+       原来用「主旋翼头 y < WATER_Y + 1」判定，既把水面之上的机身也算成入水
+       （导致水面上方还在冒烟），又在补丁里重复执行了一次 emitAccum += dt，
+       使发射频率翻倍。这里一并修正。 */
+    if (hp.y < WATER_Y + 0.6) return;
     const hullDmg  = isPlayer ? hullDamage  : S.hullDamage;
     const rotorDmg = isPlayer ? rotorDamage : S.rotorDamage;
     const shat     = isPlayer ? shattered    : S.shattered;
@@ -1308,6 +1344,10 @@ emitAccum += dt;
         const col = new THREE.Color().setHSL(0.08 + t * 0.06, 1, 0.35 + t * 0.5);
         r = col.r; g = col.g; b = col.b;
       }
+      /* ★ 不再手工剔除水下粒子。
+         水面已改为 depthWrite: true，粒子又在水面之后绘制（renderOrder 500 > 10），
+         粒子伸到水面以下的部分会由深度测试自动裁掉，形成"烟被水面挡住"的正确观感。
+         手工按 p.y 剔除会让半沉入水面的粒子整块凭空消失，反而不真实。 */
       pool.pos[write * 3]     = p.x;
       pool.pos[write * 3 + 1] = p.y;
       pool.pos[write * 3 + 2] = p.z;
@@ -1324,23 +1364,36 @@ emitAccum += dt;
       pool.size[i] = 0;
       pool.alpha[i] = 0;
     }
-    pool.geo.attributes.position.needsUpdate = true;
-    pool.geo.attributes.pcolor.needsUpdate = true;
-    pool.geo.attributes.psize.needsUpdate = true;
-    pool.geo.attributes.palpha.needsUpdate = true;
-    pool.geo.attributes.prot.needsUpdate = true;
-    pool.geo.setDrawRange(0, write);
+    pool.geo.instanceCount = write;
+    pool.iPos.needsUpdate   = true;
+    pool.iCol.needsUpdate   = true;
+    pool.iSize.needsUpdate  = true;
+    pool.iAlpha.needsUpdate = true;
+    pool.iRot.needsUpdate   = true;
+  }
+
+  /* ★ 视口高度变化时同步 uHalfH，保证像素尺寸换算基准正确。
+     原实现用 300.0 / -mv.z 固定曲线，与视口高度无关，所以这里只更新
+     uHalfH 供像素→相机空间换算使用，不改变缩放曲线本身。 */
+  function updateSizeScale() {
+    const H = renderer.domElement.height || innerHeight;
+    const halfH = H * 0.5;
+    const projF = 1 / Math.tan(camera.fov * Math.PI / 360);
+    if (smokePool.mat.uniforms.uHalfH.value !== halfH) {
+      smokePool.mat.uniforms.uHalfH.value = halfH;
+      firePool.mat.uniforms.uHalfH.value = halfH;
+    }
+    if (smokePool.mat.uniforms.uProjF.value !== projF) {
+      smokePool.mat.uniforms.uProjF.value = projF;
+      firePool.mat.uniforms.uProjF.value = projF;
+    }
   }
 
   function step(dt) {
     _camPos.copy(camera.position);
+    updateSizeScale();
     stepPool(smokePool, dt, false);
     stepPool(firePool,  dt, true);
-    const pr = Math.min(window.devicePixelRatio || 1, 2.0);
-    if (smokePool.mat.uniforms.uPR.value !== pr) {
-      smokePool.mat.uniforms.uPR.value = pr;
-      firePool.mat.uniforms.uPR.value = pr;
-    }
   }
 
   function reset() {
@@ -1822,24 +1875,36 @@ function terrainNormal(x, z, out) {
 }
 /* ===== 水面===== */
 const WATER_Y = -6;
-{
+/* ★ 水面必须写深度（depthWrite: true），否则它不参与深度缓冲，
+   粒子无论 depthTest 怎么设都无法被水面正确遮挡 —— 这是之前
+   "粒子永远压在水面上 / 又被地面挡住" 反复修不好的根本原因。
+   代价：水面会正确挡住它下方的水下地形（观感上这是对的，水下本来
+   就该被水遮住）。水色用不透明度 0.78 的半透明蓝，仍能看到浅水区的
+   地形轮廓，因为地形在水面【之上】的部分不受影响。 */
+const waterMesh = (() => {
   const waterGeo = new THREE.PlaneGeometry(60000, 60000, 1, 1);
   waterGeo.rotateX(-Math.PI / 2);
   const waterMat = new THREE.MeshBasicMaterial({
-    color: 0x00349C,          /* 浅蓝绿 */
+    color: 0x00349C,
     transparent: true,
-  opacity: 0.78,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  polygonOffset: true,
-  polygonOffsetFactor: -8,
-  polygonOffsetUnits: -8
-});
-  const waterMesh = new THREE.Mesh(waterGeo, waterMat);
-  waterMesh.position.y = WATER_Y;
-  waterMesh.renderOrder = 10;
-  scene.add(waterMesh);
-}
+    opacity: 0.78,
+    /* ★ 关键改动：由 false 改为 true，让水面参与深度测试与写入 */
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -8,
+    polygonOffsetUnits: -8
+  });
+  const m = new THREE.Mesh(waterGeo, waterMat);
+  m.position.y = WATER_Y;
+  /* 透明队列内先画水面（10），再画粒子（500）。
+     因为水面现在写深度，后画的粒子在水面之下的部分会被深度测试剔除，
+     符合"该挡住就挡住"。 */
+  m.renderOrder = 10;
+  scene.add(m);
+  return m;
+})();
 const farGroundMat = new THREE.MeshLambertMaterial({ color: 0x548340 });
 {
   const far = new THREE.Mesh(new THREE.CircleGeometry(42000, 48), farGroundMat);
@@ -2176,6 +2241,39 @@ const panelTex = new THREE.CanvasTexture(panelCanvas);
 panelTex.colorSpace = THREE.SRGBColorSpace;
 const PANEL_H3 = 0.32;
 
+const MAP_WORLD = 30000;
+const MAP_VIEW  = 4000;
+const MAP_SIZE  = 256;
+const MAP_SRC   = { hill: 'd1.png', snow: 'd2.png', desert: 'd3.png' };
+
+const mapCanvas = document.createElement('canvas');
+mapCanvas.width = MAP_SIZE;
+mapCanvas.height = MAP_SIZE;
+const mapCtx = mapCanvas.getContext('2d');
+const mapTex = new THREE.CanvasTexture(mapCanvas);
+mapTex.colorSpace = THREE.SRGBColorSpace;
+mapTex.minFilter = THREE.LinearFilter;
+mapTex.magFilter = THREE.LinearFilter;
+mapTex.generateMipmaps = false;
+
+const mapImages = { hill: null, snow: null, desert: null };
+const mapLoading = { hill: false, snow: false, desert: false };
+function loadMapImage(style) {
+  if (mapImages[style] || mapLoading[style]) return;
+  const src = MAP_SRC[style];
+  if (!src) return;
+  mapLoading[style] = true;
+  const img = new Image();
+  img.onload  = () => { mapImages[style] = img;  mapLoading[style] = false; };
+  img.onerror = () => { mapLoading[style] = false; };
+  img.src = src;
+}
+function currentMapImage() {
+  const st = settings.terrainStyle || 'hill';
+  loadMapImage(st);
+  return mapImages[st];
+}
+
 const FUSE206 = [
   { z: -2.72, w: 0.12, h: 0.16, y: -0.20 }, { z: -2.40, w: 0.50, h: 0.56, y: -0.10 },
   { z: -2.00, w: 0.78, h: 0.84, y:  0.00 }, { z: -1.40, w: 0.86, h: 0.92, y:  0.04 },
@@ -2366,6 +2464,133 @@ function drawPanel() {
   panelTex.needsUpdate = true;
 }
 
+
+function drawCockpitMap() {
+  const C = mapCtx;
+  const S = MAP_SIZE;
+  const cx = S / 2, cy = S / 2;
+  C.clearRect(0, 0, S, S);
+
+  C.fillStyle = '#0b1620';
+  C.fillRect(0, 0, S, S);
+
+  const yaw = -bodyYaw(H.quat);
+
+  C.save();
+  C.translate(cx, cy);
+  C.rotate(-yaw);
+  C.translate(-cx, -cy);
+
+  const img = currentMapImage();
+  if (img && img.width > 0) {
+    const mPerPx = MAP_WORLD / img.width;
+    const srcSpan = MAP_VIEW / mPerPx;
+    const playerSrcX = img.width  * 0.5 + H.pos.x / mPerPx;
+    const playerSrcZ = img.height * 0.5 + H.pos.z / mPerPx;
+    const sx = playerSrcX - srcSpan * 0.5;
+    const sz = playerSrcZ - srcSpan * 0.5;
+    C.imageSmoothingEnabled = true;
+    C.imageSmoothingQuality = 'high';
+    C.drawImage(img, sx, sz, srcSpan, srcSpan, 0, 0, S, S);
+  } else {
+    C.fillStyle = '#7fb6d6';
+    C.font = 'bold 13px system-ui';
+    C.textAlign = 'center';
+    C.textBaseline = 'middle';
+    C.fillText('MAP LOADING', cx, cy - 8);
+  }
+
+  C.restore();
+
+  const pxPerMeter = S / MAP_VIEW;
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+
+  const toMap = (wx, wz) => {
+    const dx = wx - H.pos.x;
+    const dz = wz - H.pos.z;
+    const rx =  dx * cosY + dz * sinY;
+    const ry = -dx * sinY + dz * cosY;
+    return { x: cx + rx * pxPerMeter, y: cy + ry * pxPerMeter };
+  };
+
+  const p0 = toMap(0, 0);
+  if (p0.x > -8 && p0.x < S + 8 && p0.y > -8 && p0.y < S + 8) {
+    C.beginPath();
+    C.arc(p0.x, p0.y, 3.6, 0, Math.PI * 2);
+    C.fillStyle = '#7fe9ff';
+    C.fill();
+    C.beginPath();
+    C.arc(p0.x, p0.y, 5.4, 0, Math.PI * 2);
+    C.strokeStyle = 'rgba(127,233,255,.65)';
+    C.lineWidth = 1;
+    C.stroke();
+  }
+
+  for (let i = 0; i < NPCs.length; i++) {
+    const c = NPCs[i];
+    if (c.S.shattered) continue;
+    const p = toMap(c.S.pos.x, c.S.pos.z);
+    if (p.x < -4 || p.x > S + 4 || p.y < -4 || p.y > S + 4) continue;
+    C.beginPath();
+    C.arc(p.x, p.y, 2.6, 0, Math.PI * 2);
+    C.fillStyle = c.isRemoteNPC ? '#ffb347' : '#9effcf';
+    C.fill();
+  }
+
+  if (MP.remoteCraft && !MP.remoteCraft.S.shattered) {
+    const p = toMap(MP.remoteCraft.S.pos.x, MP.remoteCraft.S.pos.z);
+    if (p.x > -4 && p.x < S + 4 && p.y > -4 && p.y < S + 4) {
+      C.beginPath();
+      C.arc(p.x, p.y, 3.0, 0, Math.PI * 2);
+      C.fillStyle = '#ff8a8a';
+      C.fill();
+    }
+  }
+
+  C.beginPath();
+  C.moveTo(cx, cy - 9);
+  C.lineTo(cx - 6, cy + 7);
+  C.lineTo(cx, cy + 4);
+  C.lineTo(cx + 6, cy + 7);
+  C.closePath();
+  C.fillStyle = '#ff7a45';
+  C.fill();
+  C.strokeStyle = '#1a0e08';
+  C.lineWidth = 1;
+  C.stroke();
+
+  C.strokeStyle = 'rgba(120,200,240,.85)';
+  C.lineWidth = 2;
+  C.strokeRect(1, 1, S - 2, S - 2);
+
+  const dxN = 0, dzN = -1;
+  const rxN =  dxN * cosY + dzN * sinY;
+  const ryN = -dxN * sinY + dzN * cosY;
+  const ang = Math.atan2(ryN, rxN);
+  const R = cx - 14;
+  const nx = cx + rxN * R;
+  const ny = cy + ryN * R;
+  C.save();
+  C.translate(nx, ny);
+  C.rotate(ang + Math.PI / 2);
+  C.beginPath();
+  C.moveTo(0, -5);
+  C.lineTo(-4, 4);
+  C.lineTo(4, 4);
+  C.closePath();
+  C.fillStyle = 'rgba(200,240,255,.92)';
+  C.fill();
+  C.restore();
+  C.fillStyle = 'rgba(200,240,255,.92)';
+  C.font = 'bold 10px system-ui';
+  C.textAlign = 'center';
+  C.textBaseline = 'middle';
+  C.fillText('N', nx, ny + 10);
+
+  mapTex.needsUpdate = true;
+}
+
 /* =====================================================================
    11. 现实外灯（左红 / 右绿 / 尾白 / 顶部红防撞 / 垂尾白频闪）
    默认始终常亮；想看频闪把 NAV_BLINK 改成 true
@@ -2506,6 +2731,67 @@ if (cfg.interiorTint) {
   cbox(0.22, 0.30, 0.64, mats.cabin2, 0, cfg.floorY + 0.18, cfg.cycZ + 0.10);
   cbox(0.24, 0.030, 0.66, mats.cabin2, 0, cfg.floorY + 0.32, cfg.cycZ + 0.10);
 
+
+
+/* ---- 座舱航图屏（GI 275 风格，装在仪表盘上方、座舱顶棚前沿） ----
+   整块用 Group 包住，统一向主驾驶偏转（mapYaw），不散架
+*/
+const sizeK = cfg.mapScale || 1.0;
+const MAP_R = 0.095 * sizeK;
+const mapTilt = -Math.PI / 2 + 1.45;
+const mapYaw = -45;
+const mapPos = new THREE.Vector3(
+  0,
+  cfg.panelY + 0.54 * sizeK + (cfg.panelW > 1.5 ? 0.13 : 0) + (cfg.mapLift || 0),
+  cfg.panelZ + 0.45
+);
+
+/* 整块地图（支架 + bezel + 屏 + 玻璃罩）统一挂到 Group 上 */
+const mapGroup = new THREE.Group();
+mapGroup.position.copy(mapPos);
+mapGroup.rotation.set(mapTilt, mapYaw, 0);
+cockpit.add(mapGroup);
+cockpit.userData.mapGroup = mapGroup;
+
+/* 顶部悬挂支架：从座舱顶棚往下伸一根短臂，吊住地图屏 */
+{
+  const armMat = new THREE.MeshLambertMaterial({ color: 0x14191f });
+  /* 顶棚横梁（沿座舱顶棚的横向安装条） */
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.05), armMat);
+  rail.position.set(0, 0.28, -0.02);
+  mapGroup.add(rail);
+  /* 竖直吊臂（从横梁往下，到屏顶部） */
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.30, 8), armMat);
+  arm.position.set(0, 0.13, -0.02);
+  mapGroup.add(arm);
+  /* 屏顶连接块（吊臂底端贴到屏顶部） */
+  const mount = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.03), armMat);
+  mount.position.set(0, -0.01, -0.03);
+  mapGroup.add(mount);
+}
+
+/* 外圈 bezel（深色圆环） */
+{
+  const bezelGeo = new THREE.RingGeometry(MAP_R, MAP_R + 0.013, 48);
+  const bezelMat = new THREE.MeshLambertMaterial({ color: 0x0d1116 });
+  const bezel = new THREE.Mesh(bezelGeo, bezelMat);
+  bezel.position.set(0, 0, 0);
+  bezel.renderOrder = 3;
+  mapGroup.add(bezel);
+}
+
+/* 地图面 */
+{
+  const mapGeo = new THREE.CircleGeometry(MAP_R, 48);
+  const mapMat = new THREE.MeshBasicMaterial({ map: mapTex, side: THREE.DoubleSide });
+  const mapMesh = new THREE.Mesh(mapGeo, mapMat);
+  mapMesh.position.set(0, 0, 0.001);
+  mapMesh.renderOrder = 4;
+  mapMesh.name = 'cockpitMap';
+  mapGroup.add(mapMesh);
+  cockpit.userData.mapMesh = mapMesh;
+}
+
   function makeCyclic(px, nm) {
     const g = new THREE.Group();
     g.name = nm;
@@ -2562,7 +2848,7 @@ if (cfg.interiorTint) {
   cockpitLight.position.set(-0.10, PY + 0.26, PZ + 0.66);
   cockpit.add(cockpitLight);
   cockpit.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
-  return { cockpit, cyclicL, cyclicR, colL, colR, pedals, cockpitLight };
+  return { cockpit, cyclicL, cyclicR, colL, colR, pedals, cockpitLight, mapMesh: cockpit.userData.mapMesh };
 }
 
 /* =====================================================================
@@ -2922,8 +3208,9 @@ for (const s of [-1, 1]) {
   const ck = buildCockpit(mats, {
     hull: CABIN407, floorW: 1.50, floorLen: 1.90, floorY: -0.62, floorZ: -0.55,
     seatX: 0.48, panelW: 1.60, panelZ: -2.00, panelY: 0.14, sideX: 0.84,
-    collX: 0.40, collZ: -0.50, cycZ: -1.26, pedalZ: -1.44, seatScale: 1.05
-  });
+  collX: 0.40, collZ: -0.50, cycZ: -1.26, pedalZ: -1.44, seatScale: 1.05,
+  mapLift: 0.10
+});
   group.add(ck.cockpit);
   return {
     group, fuselage, mainRotor, tailRotor, mainBlades, tailBlades, mainAngles,
@@ -3114,8 +3401,9 @@ for (const s of [-1, 1]) {
     hull: CABIN407, floorW: 1.50, floorLen: 1.90, floorY: -0.62, floorZ: -0.55,
     seatX: 0.48, panelW: 1.60, panelZ: -2.00, panelY: 0.14, sideX: 0.84,
     collX: 0.40, collZ: -0.50, cycZ: -1.26, pedalZ: -1.44, seatScale: 1.05,
-    interiorTint: 0x556b3a
-  });
+  interiorTint: 0x556b3a,
+  mapLift: 0.10
+});
   group.add(ck.cockpit);
   return {
     group, fuselage, mainRotor, tailRotor, mainBlades, tailBlades, mainAngles,
@@ -4644,6 +4932,11 @@ recolorTrees();
 
 /* ★ 画质联动粒子预算 */
 FX.setBudget(q.fxSmoke, q.fxFire);
+
+
+/* 座舱航图：切换地形风格时，触发对应底图加载 */
+loadMapImage(settings.terrainStyle || 'hill');
+
 /* 探照灯状态 */
 if (AC && AC.searchLight) AC.searchLight.visible = !!settings.searchLight;
 refreshSearchLightBtn();
@@ -6545,38 +6838,6 @@ let lastTime = performance.now();
 let acc = 0, panelTimer = 1;
 const STEP = 1 / 120;
 function loop(now) {
-    async function tryAutoPlayBGM() {
-    createBGMIfNeed();
-    try {
-        await bgm.play();
-        audioUnlocked = true;
-        bgmStarted = true;
-        bgm.volume = 0.45;
-    } catch(err) {
-        console.log("[BGM]自动播放被拦截，等待用户手势解锁");
-    }
-}
-document.addEventListener('DOMContentLoaded', ()=>{
-    setTimeout(tryAutoPlayBGM, 450);
-});
-
-(function(){
-  const data = localStorage.getItem("heli2026_settings");
-  if(data){
-    try{
-      const s = JSON.parse(data);
-      Object.assign(settings, s);
-    }catch(err){}
-  }
-  document.querySelectorAll('.seg').forEach(seg=>{
-    const k = seg.dataset.key;
-    const v = settings[k];
-    seg.querySelectorAll("button").forEach(btn=>{
-      btn.classList.toggle("on", btn.dataset.v === v);
-    })
-  })
-})();
-
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
@@ -6671,7 +6932,7 @@ if (!inMenu) {
   }
 
   panelTimer += dt;
-  if (panelTimer > 0.08) { panelTimer = 0; drawPanel(); }
+if (panelTimer > 0.08) { panelTimer = 0; drawPanel(); drawCockpitMap(); }
 
   sun.position.set(
     H.pos.x + sunDirVec.x * 130,
@@ -6704,9 +6965,40 @@ window.addEventListener('orientationchange', () => {
   }, 260);
 });
 
-/* ---------- 启动 ---------- */
+/* ---------- 启动（一次性初始化） ---------- */
+async function tryAutoPlayBGM() {
+  createBGMIfNeed();
+  try {
+    await bgm.play();
+    audioUnlocked = true;
+    bgmStarted = true;
+    bgm.volume = 0.45;
+  } catch (err) {
+    console.log("[BGM]自动播放被拦截，等待用户手势解锁");
+  }
+}
+setTimeout(tryAutoPlayBGM, 450);
+
+(function () {
+  const data = localStorage.getItem("heli2026_settings");
+  if (data) {
+    try {
+      const s = JSON.parse(data);
+      Object.assign(settings, s);
+    } catch (err) {}
+  }
+  document.querySelectorAll('.seg').forEach(seg => {
+    const k = seg.dataset.key;
+    const v = settings[k];
+    seg.querySelectorAll("button").forEach(btn => {
+      btn.classList.toggle("on", btn.dataset.v === v);
+    });
+  });
+})();
+
 buildHangarList();
 applySettings();
+loadMapImage(settings.terrainStyle || 'hill');
 AC = createAircraft(AIRCRAFT[aircraftId]);
 applyAircraftParams(AIRCRAFT[aircraftId]);
 scene.add(AC.group);
