@@ -26,15 +26,11 @@
   .row b{font-variant-numeric:tabular-nums;font-size:15px;color:#7fe9ff;font-weight:600;}
   .row b.nm{font-size:12px;letter-spacing:1px;}
   .row i{opacity:.42;font-size:10px;font-style:normal;}
-  #status{position:absolute;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);
-    font-size:11.5px;color:#cfeaff;background:rgba(8,18,26,.5);padding:5px 15px;border-radius:20px;
-    border:1px solid rgba(120,220,255,.2);white-space:nowrap;backdrop-filter:blur(8px);}
+  #status{display:none !important;}
   #status b{color:#7fe9ff;}
   #status .warn{color:#ffb347;}
   #status .bad{color:#ff6b6b;}
-  #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);padding:10px 20px;border-radius:11px;
-    background:rgba(15,30,42,.86);border:1px solid rgba(120,220,255,.38);color:#dff3ff;font-size:13px;
-    opacity:0;transition:opacity .35s;white-space:nowrap;}
+  #toast{display:none !important;}
   #toast.bad{background:rgba(150,30,30,.8);border-color:rgba(255,110,110,.5);color:#ffe3e3;}
   #toast.epic{background:linear-gradient(90deg,rgba(60,20,120,.92),rgba(10,40,90,.92));
     border-color:rgba(160,140,255,.6);color:#e8e0ff;}
@@ -323,7 +319,7 @@
 <body>
 
 <div id="hud">
-  <div id="status">系统就绪</div>
+  <div id="status"></div>
   <div id="toast"></div>
 </div>
 
@@ -395,7 +391,7 @@
   <button id="btn-settings" class="ghost">设 置</button>
   <button id="btn-donate" class="ghost">捐 赠</button>
 </div>
-  <div class="corner">v6.0</div>
+  <div class="corner">v6.5</div>
 </div>
 
 <div id="settings">
@@ -5187,6 +5183,13 @@ const MODE_COLOR = { hover: '#7fe9ff', orbit: '#9effcf', free: '#ffd98a', chase:
 const allCrafts = [];
 const NPCs = [];
 const MAX_NPC = 6;
+
+/* ★ 追击 / 逃跑 参数 */
+const HUNT_RANGE = 700;      /* 追击模式搜索「非追击 NPC」猎物的半径 (m) */
+const PROVOKE_DIST = 20;     /* 玩家靠近到此距离内 = 挑衅 / 骚扰 (m) */
+const PROVOKE_TIME = 10;     /* 追击 NPC 被挑衅后锁定玩家的时间 (s) */
+const HARASS_LIMIT = 3;      /* 自由模式 NPC：被玩家「反复靠近」累计到此值就逃跑 */
+const FLEE_SPEED = 36;       /* 逃跑水平速度 (m/s)；低于追击模式的 45，追得上 */
 let npcSeq = 0;
 let player = null;
 let paused = false;
@@ -5287,6 +5290,8 @@ if (!A) return;
 
 /* ★ 情绪更新：多人联机时被反复拉扯会生气 */
 npcUpdateAnger(c, dt);
+/* 非追击模式绝不能残留瞄准航向（否则机头会被"拉"向玩家） */
+if (A.mode !== 'chase') A.aimHeading = null;
   if (!S.engineOn) S.engineOn = true;     // NPC 引擎默认开启
 /* 电传辅助：损坏 / 失控时不自动开，跟玩家一样 */
 if (!c.assistDamaged && !c.controlLoss) {
@@ -5367,6 +5372,12 @@ if (!c.assistDamaged && !c.controlLoss) {
     const w = Math.min(26, d * 0.70);
     if (d > 1) { vx = dx / d * w; vz = dz / d * w; }
     targetY = A.ty;
+    /* ★ 逃跑：被追击模式 NPC 盯上 / 被玩家反复骚扰 → 覆盖巡航速度，背对威胁高速脱离 */
+    if (npcUpdateFlee(c, dt)) {
+      const fo = npcFleeSteer(c, t);
+      vx = fo.vx; vz = fo.vz;
+      targetY = clamp(S.pos.y + Math.sin(t * 0.8 + A.seed) * 8, gy + 40, gy + 150);
+    }
     for (const o of allCrafts) {
       if (o === c || isShatteredOf(o)) continue;
       if (!o.isNPC) continue;
@@ -5393,21 +5404,9 @@ if (!c.assistDamaged && !c.controlLoss) {
 
 } else if (A.mode === 'chase') {
   /* 追击玩家：保持机炮射程，机头对准，不撞击 */
-  /* ★ 默认目标：最近的、活着的玩家（本地玩家 + 联机对手都算） */
-let pc = null;
-if (c.angerTarget && !isShatteredOf(c.angerTarget) && !c.angerTarget.S.crashed) {
-  pc = c.angerTarget;
-} else {
-  let bestD = 1e9;
-  for (const o of allCrafts) {
-    if (o === c) continue;
-    if (o.isNPC) continue;
-    if (isShatteredOf(o) || o.S.crashed) continue;
-    if (!o.model || !o.model.group.visible) continue;
-    const d = S_dist(c, o);
-    if (d < bestD) { bestD = d; pc = o; }
-  }
-}
+  /* ★ 追击目标由 npcUpdateHunt 统一选出：
+     联机怒气目标 > 挑衅的玩家(20m内) > 最近的（玩家 / 700m 内非追击 NPC） */
+  const pc = c.huntTarget;
   const ok = pc && !isShatteredOf(pc) && !pc.S.crashed && pc.model.group.visible;
   if (ok) {
     const dx = pc.S.pos.x - S.pos.x;
@@ -5419,15 +5418,25 @@ let radial = 0;
 if (dh > WANT_D + HYST)      radial = 45;   /* 远了拼命追 */
 else if (dh < WANT_D - HYST) radial = -12;  /* 只有太近才慢慢退 */
 else                          radial = 0;
+    /* ★ 没炮的机型（除 407M 外）：不保持距离，全速直接撞向目标 */
+    const ram = !(c.def && c.def.id === 'y407M');
+    if (ram) radial = 45;
     if (dh > 0.5) { vx = dx / dh * radial; vz = dz / dh * radial; }
+    /* 猎物是 NPC：叠加猎物自身速度（前馈），逃跑中的猎物才能被咬住；限速 60m/s */
+    if (pc.isNPC || ram) {
+      vx += pc.S.vel.x * 0.85; vz += pc.S.vel.z * 0.85;
+      const spd = Math.hypot(vx, vz);
+      if (spd > 60) { vx *= 60 / spd; vz *= 60 / spd; }
+    }
     /* 机头对准玩家（不管有没有炮） */
     A.aimHeading = Math.atan2(-dx, -dz);
     /* 高度：保持跟玩家差不多高（略高一点，方便机炮下压） */
-    targetY = pc.S.pos.y + 6;
-    /* ★ 20 米强制避让其它 NPC */
+    targetY = pc.S.pos.y + (ram ? 0 : 6);   /* 撞击型与目标同高 */
+    /* ★ 20 米强制避让其它 NPC（撞击型不避让自己的目标） */
     for (const o of allCrafts) {
       if (o === c || isShatteredOf(o)) continue;
       if (!o.isNPC) continue;
+      if (ram && o === pc) continue;
       const ox = S.pos.x - o.S.pos.x, oy = S.pos.y - o.S.pos.y, oz = S.pos.z - o.S.pos.z;
       const od = Math.hypot(ox, oy, oz);
       if (od < 20 && od > 0.01) {
@@ -5449,6 +5458,7 @@ else                          radial = 0;
       if (dd < 26 && dd > 0.01) { const k = (26 - dd) * 0.35; vx += ddx / dd * k; vz += ddz / dd * k; }
     }
   } else {
+      A.aimHeading = null;   /* 没目标：不要保留上一次的瞄准航向 */
       const dx = A.home.x - S.pos.x, dz = A.home.z - S.pos.z, d = Math.hypot(dx, dz);
       const w = Math.min(8, d * 0.5);
       if (d > 0.5) { vx = dx / d * w; vz = dz / d * w; }
@@ -5523,6 +5533,148 @@ function npcSafeSinkCheck(c, dt, t) {
      让它在 reactT 秒内刚好落地，且留 20% 余量 */
   c.safeSink = -(agl / reactT) * 0.8;
 }
+/* ===================== NPC 猎杀 / 逃跑 ===================== */
+function craftAlive(o) { return !!o && !isShatteredOf(o) && !o.S.crashed; }
+function playerTargetable(o) {
+  /* 玩家一侧：本地玩家 + 联机对手（非 NPC），必须活着且模型可见 */
+  return !o.isNPC && craftAlive(o) && !!o.model && o.model.group.visible;
+}
+function isPeacefulNPC(o) {
+  /* 猎物：本地权威的、非追击模式的 NPC。
+     联机镜像 NPC 的状态完全由对方广播驱动，本地打了不算，所以不当猎物 */
+  return !!o && o.isNPC && !o.isRemoteNPC && !!o.ai && o.ai.mode !== 'chase';
+}
+function npcUpdateHunt(c, dt) {
+  const A = c.ai;
+  if (!A || c.isRemoteNPC || A.mode !== 'chase' || !craftAlive(c)) {
+    c.huntTarget = null; c.provokeTimer = 0; c.provokeTarget = null;
+    return;
+  }
+
+  /* ① 挑衅检测：玩家（本地 / 联机对手）进入 20m → 锁定该玩家 10 秒 */
+  let prov = null, provD = PROVOKE_DIST;
+  for (const o of allCrafts) {
+    if (o === c || !playerTargetable(o)) continue;
+    const d = S_dist(c, o);
+    if (d < provD) { provD = d; prov = o; }
+  }
+  if (prov) {
+    c.provokeTimer = PROVOKE_TIME; c.provokeTarget = prov;
+  } else if (c.provokeTimer > 0) {
+    c.provokeTimer -= dt;
+    if (c.provokeTimer <= 0) c.provokeTarget = null;
+  }
+
+  /* ② 选目标：联机怒气目标 > 挑衅玩家 > 最近的（玩家 / 700m 内非追击 NPC） */
+  let tgt = null;
+  if (c.angerTarget && craftAlive(c.angerTarget)) {
+    tgt = c.angerTarget;
+  } else if (c.provokeTimer > 0 && c.provokeTarget && craftAlive(c.provokeTarget)) {
+    tgt = c.provokeTarget;
+  } else {
+    /* 候选 = 玩家（任意距离）+ 700m 内的非追击 NPC，直接取「最近的」。
+       只做 30% 的滞回，避免两个目标距离相近时来回切；玩家贴脸时一定会被优先锁定 */
+    let best = null, bd = 1e9;
+    for (const o of allCrafts) {
+      if (o === c) continue;
+      const isPlayerSide = playerTargetable(o);
+      if (!isPlayerSide && !(isPeacefulNPC(o) && craftAlive(o))) continue;
+      const d = S_dist(c, o);
+      if (o.isNPC && d > HUNT_RANGE) continue;
+      if (d < bd) { bd = d; best = o; }
+    }
+    const cur = c.huntTarget;
+    if (cur && cur !== best && craftAlive(cur)
+        && (cur.isNPC ? (NPCs.indexOf(cur) >= 0 && isPeacefulNPC(cur) && S_dist(c, cur) < HUNT_RANGE * 1.25)
+                      : playerTargetable(cur))
+        && S_dist(c, cur) <= bd * 1.3) {
+      best = cur;
+    }
+    tgt = best;
+  }
+  c.huntTarget = tgt;
+}
+
+/* 自由模式 NPC：是否该逃跑（被追击 / 被玩家反复骚扰）。返回 true = 正在逃跑 */
+function npcUpdateFlee(c, dt) {
+  const wasFleeing = c.fleeTimer > 0;
+
+  /* ① 被追击：有追击模式的 NPC 把我当猎物 */
+  let hunted = false;
+  for (const h of NPCs) {
+    if (h === c || h.isRemoteNPC || !h.ai || h.ai.mode !== 'chase') continue;
+    if (h.huntTarget === c && craftAlive(h)) { hunted = true; break; }
+  }
+
+  /* ② 被玩家反复骚扰：每「靠近 20m 内」一次记 1 点，赖着不走每秒 +0.3，离开后慢慢消气 */
+  let near = null;
+  for (const o of allCrafts) {
+    if (o === c || !playerTargetable(o)) continue;
+    if (S_dist(c, o) < PROVOKE_DIST) { near = o; break; }
+  }
+  if (near) {
+    if (!c._playerNear) c.harass += 1;
+    c._playerNear = true;
+    c.harass += dt * 0.3;
+  } else {
+    c._playerNear = false;
+    c.harass = Math.max(0, c.harass - dt * 0.08);
+  }
+  if (c.harass >= HARASS_LIMIT) {
+    c.harass = 0;
+    c.fleeTimer = 12 + Math.random() * 6;     /* 逃一阵：12~18 秒 */
+    c.fleeFromPlayer = near;
+  }
+
+  /* ③ 计时：被追击期间一直跑，摆脱后再多跑 5 秒 */
+  if (hunted) c.fleeTimer = Math.max(c.fleeTimer, 5);
+  else if (c.fleeTimer > 0) c.fleeTimer = Math.max(0, c.fleeTimer - dt);
+
+  if (c.fleeTimer <= 0) c.fleeFromPlayer = null;
+  if (!wasFleeing && c.fleeTimer > 0) {
+    toast(hunted ? '😨 NPC 被追击，开始逃跑' : '😨 NPC 被你骚扰，开始逃跑', 1.8);
+  }
+  return c.fleeTimer > 0;
+}
+const _fleeOut = { vx: 0, vz: 0 };
+function npcFleeSteer(c, t) {
+  const S = c.S, A = c.ai;
+  let ax = 0, az = 0;
+  /* 背对所有正在盯着我的追击者 */
+  for (const h of NPCs) {
+    if (h === c || h.isRemoteNPC || !h.ai || h.ai.mode !== 'chase') continue;
+    if (h.huntTarget !== c || !craftAlive(h)) continue;
+    const dx = S.pos.x - h.S.pos.x, dz = S.pos.z - h.S.pos.z, d = Math.hypot(dx, dz) || 1;
+    ax += dx / d; az += dz / d;
+  }
+  /* 背对骚扰我的玩家 */
+  const p = c.fleeFromPlayer;
+  if (p && craftAlive(p)) {
+    const dx = S.pos.x - p.S.pos.x, dz = S.pos.z - p.S.pos.z, d = Math.hypot(dx, dz) || 1;
+    ax += dx / d; az += dz / d;
+  }
+  let al = Math.hypot(ax, az);
+  if (al < 0.05) {                    /* 威胁都没了（只剩计时尾巴）：顺着当前速度继续跑 */
+    ax = S.vel.x; az = S.vel.z; al = Math.hypot(ax, az);
+    if (al < 1) { const yw = bodyYaw(S.quat); ax = -Math.sin(yw); az = -Math.cos(yw); al = 1; }
+  }
+  ax /= al; az /= al;
+  /* 快到岛外海域时，逐渐拐向地图中心，别一路逃出 4km 的世界 */
+  const rr = Math.max(Math.abs(S.pos.x), Math.abs(S.pos.z));
+  if (rr > 3400) {
+    const k = Math.min(1, (rr - 3400) / 500);
+    const cl = Math.hypot(S.pos.x, S.pos.z) || 1;
+    ax = ax * (1 - k) + (-S.pos.x / cl) * k;
+    az = az * (1 - k) + (-S.pos.z / cl) * k;
+    const nl = Math.hypot(ax, az) || 1; ax /= nl; az /= nl;
+  }
+  /* 侧向蛇形机动，别当固定靶 */
+  const wv = Math.sin(t * 0.9 + A.seed * 3) * 9;
+  _fleeOut.vx = ax * FLEE_SPEED - az * wv;
+  _fleeOut.vz = az * FLEE_SPEED + ax * wv;
+  return _fleeOut;
+}
+
 /* ===================== NPC 情绪系统 ===================== */
 function S_dist(a, b) {
   const dx = a.S.pos.x - b.S.pos.x;
@@ -5602,43 +5754,35 @@ function npcUpdateAnger(c, dt) {
 }
 /* ===================== NPC 机炮 ===================== */
 function npcGunControl(c, dt) {
-  /* 只有 407M 才有炮 */
-  if (!c.def || c.def.id !== 'y407M') { c.gunFiring = false; return; }
-  if (c.S.crashed || c.S.shattered) { c.gunFiring = false; return; }
+  /* 只有 407M 有炮；并且只有「追击模式」才会开火。
+     悬停 / 盘旋 / 自由模式的 407M 一律不开火、不瞄准，也不会主动攻击玩家。
+     目标 = npcUpdateHunt 选出的 huntTarget（飞行和开火共用同一个目标） */
+  c.gunFiring = false;
+  if (!c.def || c.def.id !== 'y407M') { c.gunTarget = null; return; }
+  if (c.S.crashed || c.S.shattered) { c.gunTarget = null; c._gunHold = 0; return; }
+  if (!c.ai || c.ai.mode !== 'chase') { c.gunTarget = null; c._gunHold = 0; return; }
 
-  /* 找目标：最近的、没解体的对手 */
-  let best = null, bestD = 600;  /* 600m 内才开火 */
-  for (const o of allCrafts) {
-    if (o === c) continue;
-    if (isShatteredOf(o)) continue;
-    if (o.S.crashed) continue;
-    const dx = o.S.pos.x - c.S.pos.x;
-    const dy = o.S.pos.y - c.S.pos.y;
-    const dz = o.S.pos.z - c.S.pos.z;
-    const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    if (d < bestD) { bestD = d; best = o; }
+  const best = c.huntTarget;
+  if (!best || !craftAlive(best) || S_dist(c, best) > 600) {   /* 600m 内才开火 */
+    c.gunTarget = null; c._gunHold = 0; return;
   }
-c.gunTarget = best;
-if (!best) { c.gunFiring = false; return; }
+  c.gunTarget = best;
 
-/* 机头朝向 和 到目标方向 */
-const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(c.S.quat);
-const to = new THREE.Vector3(
-  best.S.pos.x - c.S.pos.x,
-  best.S.pos.y - c.S.pos.y,
-  best.S.pos.z - c.S.pos.z
-).normalize();
+  /* 机头朝向 和 到目标方向 */
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(c.S.quat);
+  const to = new THREE.Vector3(
+    best.S.pos.x - c.S.pos.x,
+    best.S.pos.y - c.S.pos.y,
+    best.S.pos.z - c.S.pos.z
+  ).normalize();
 
-const dot = fwd.dot(to);
-if (!c._gunHold) c._gunHold = 0;
+  const dot = fwd.dot(to);
+  if (!c._gunHold) c._gunHold = 0;
   const aimTol = c.anger > 0.9 ? 0.985 : 0.94;
   if (dot > aimTol) c._gunHold = 0.6;
-else c._gunHold = Math.max(0, c._gunHold - dt);
-c.gunFiring = (c._gunHold > 0);
-
-/* 主动瞄准：把"朝向弹着点"的期望航向/俯仰告诉 AI */
-c.ai.aimHeading = Math.atan2(-to.x, -to.z);
-c.ai.aimPitch = Math.asin(clamp(to.y, -1, 1));
+  else c._gunHold = Math.max(0, c._gunHold - dt);
+  c.gunFiring = (c._gunHold > 0);
+  /* 转向由 aiControl 的追击分支负责（它对准的就是同一个 huntTarget），这里不再写 aimHeading */
 }
 
 function npcFireOneBullet(c) {
@@ -5681,6 +5825,7 @@ function npcFireOneBullet(c) {
     for (const o of allCrafts) {
       if (o === c) continue;
       if (isShatteredOf(o)) continue;
+      if (o.isNPC && o.ai && o.ai.mode === 'chase') continue;   /* 追击组是友军：弹道穿过不算命中 */
       for (const cp of o.colPoints) {
         const cw = cp.p.clone().applyQuaternion(o.S.quat).add(o.S.pos);
         const dx = px - cw.x, dy = py - cw.y, dz = pz - cw.z;
@@ -5744,6 +5889,7 @@ function npcStepGun(c, dt) {
 
 /* ---- NPC 步进：换脑 → 同一套 physics() → 座舱摇杆跟着动 ---- */
 function stepNPC(c, dt, t) {
+  npcUpdateHunt(c, dt);          /* ★ 先选好猎杀目标，飞行和机炮共用 */
   npcGunControl(c, dt);
   npcStepGun(c, dt);
   aiControl(c, dt, t);
@@ -5817,7 +5963,10 @@ lastDistToTarget: 1e9,
 /* ★ 防拍地 */
 nextSafeCheck: 0,
 safeSink: null,
-gunFiring: false, gunShotCount: 0, gunShotAccum: 0, gunTarget: null
+gunFiring: false, gunShotCount: 0, gunShotAccum: 0, gunTarget: null,
+/* ★ 猎杀 / 逃跑 */
+huntTarget: null, provokeTimer: 0, provokeTarget: null,
+fleeTimer: 0, fleeFromPlayer: null, harass: 0, _playerNear: false
   };
   const gy = terrainHeight(ground.x, ground.z);
   const alt = gy + (mode === 'orbit' ? 34 : mode === 'hover' ? 24 : 30);
@@ -5875,6 +6024,9 @@ function resetNPCs() {
     c.model.group.visible = true;
     c.deathTimer = 0;
     c.ai.iAlt = 0; c.ai.timer = 0;
+    c.huntTarget = null; c.provokeTimer = 0; c.provokeTarget = null;
+    c.fleeTimer = 0; c.fleeFromPlayer = null; c.harass = 0; c._playerNear = false;
+    c.gunFiring = false; c.gunTarget = null; c._gunHold = 0; c.ai.aimHeading = null;
   }
 }
 
