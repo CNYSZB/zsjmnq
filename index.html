@@ -141,6 +141,18 @@
     background:rgba(10,24,34,.6);color:#7fa3ba;border:none;border-right:1px solid rgba(90,200,255,.14);}
   .seg button:last-child{border-right:none;}
   .seg button.on{background:rgba(70,190,255,.32);color:#eafaff;font-weight:600;}
+  #wxTag{position:fixed;left:10px;top:calc(58px + env(safe-area-inset-top));z-index:11;pointer-events:none;
+    font-size:11px;color:#bfe9ff;background:rgba(8,18,26,.44);border:1px solid rgba(120,220,255,.2);
+    border-radius:9px;padding:3px 9px;display:none;letter-spacing:.5px;}
+  body.playing #wxTag{display:block;}
+  #windDial{position:relative;width:84px;height:84px;border-radius:50%;flex:0 0 auto;touch-action:none;
+    border:2px solid rgba(140,230,255,.35);background:radial-gradient(circle,rgba(120,220,255,.12),rgba(120,220,255,.02));}
+  #windDial::before{content:'N';position:absolute;left:50%;top:1px;transform:translateX(-50%);font-size:9px;color:#5f8ea8;}
+  #windArrow{position:absolute;left:50%;top:50%;width:0;height:0;}
+  #windArrow i{position:absolute;left:-2px;top:-32px;width:4px;height:64px;background:#7fe9ff;border-radius:2px;}
+  #windArrow i::before{content:'';position:absolute;left:-6px;top:-8px;border:8px solid transparent;
+    border-bottom:14px solid #7fe9ff;border-top:0;}
+  .wsl{width:100px;accent-color:#4fd2ff;}
   .tgl{position:relative;width:50px;height:27px;border-radius:14px;flex:0 0 auto;
     background:rgba(20,40,56,.9);border:1px solid rgba(90,200,255,.22);transition:background .18s,border-color .18s;}
   .tgl::after{content:'';position:absolute;left:3px;top:2.5px;width:20px;height:20px;border-radius:50%;
@@ -319,6 +331,7 @@
 <body>
 
 <div id="hud">
+  <div id="wxTag"></div>
   <div id="status"></div>
   <div id="toast"></div>
 </div>
@@ -391,7 +404,7 @@
   <button id="btn-settings" class="ghost">设 置</button>
   <button id="btn-donate" class="ghost">捐 赠</button>
 </div>
-  <div class="corner">v6.5</div>
+  <div class="corner">v7.0</div>
 </div>
 
 <div id="settings">
@@ -449,6 +462,14 @@
     <button data-v="desert">沙漠</button>
   </div>
 </div>
+<div class="opt"><label>天气<span class="hint">自动=按地形随机变化</span></label>
+  <div class="seg" data-wx="1" id="wxSeg" style="flex-wrap:wrap;max-width:210px;"></div></div>
+<div class="opt"><label>风向<span class="hint">拖动圆盘，箭头指向风吹去的方向</span></label>
+  <div id="windDial"><div id="windArrow"><i></i></div></div></div>
+<div class="opt"><label>风力<span class="hint" id="windTxt">0 = 无风</span></label>
+  <input type="range" id="windSl" class="wsl" min="0" max="30" step="1" value="4"></div>
+<div class="opt"><label>风力随天气<span class="hint">开=自动叠加天气风；关=仅用手动风</span></label>
+  <div class="tgl on" id="wxAutoWind"></div></div>
     <button id="btn-set-close">返 回</button>
 <div style="font-size:11.5px;line-height:2;color:#8fb3c7;">
   <div><b style="color:#9fe8ff;">WASD</b> —— 左摇杆（总距 + 脚舵）</div>
@@ -722,7 +743,8 @@ const settings = {
   searchLight: false,
   atmosphere: true, clouds: true, cloudShadow: true,
   shadows: true, airDensity: true, dayNight: true,
-  terrainStyle: 'hill'
+  terrainStyle: 'hill',
+  wxType: 'auto', windDir: 90, windSpd: 4, wxAutoWind: true
 };
 const VIEW_CFG = {
   near: { fogNear: 180, fogFar: 1400, camFar: 6000,  farTerrain: false },
@@ -816,10 +838,6 @@ scene.add(sky);
 
 /* =====================================================================
    FX —— 火焰 / 黑烟 / 部件冒烟 粒子系统（按 craft 跟踪）
-   - 两个 Points：烟雾（NormalBlending）/ 火焰（AdditiveBlending）
-   - 粒子池 + 环形游标，O(1) 分配
-   - 距离裁剪：超 400m 回收
-   - 每帧由 loop() 遍历 allCrafts 驱动
    ===================================================================== */
 const FX = (() => {
   function makeSoftTex(size, pow) {
@@ -849,15 +867,8 @@ const FX = (() => {
   const smokeTex = makeSoftTex(64, 1.5);
   const fireTex  = makeSoftTex(64, 2.2);
 
-  /* ★ 真正的贴图四边形（instanced billboard），不再用 gl_PointSize 点精灵。
-     - 每个粒子 = 一个单位四边形的 4 个顶点，用 InstancedBufferAttribute 逐实例传参
-     - 尺寸换算刻意对齐原 gl_PointSize 的屏幕空间公式：
-         原: gl_PointSize = psize * uPR * (300.0 / -mv.z)   [像素]
-         现: 屏幕高度(px) = sizeWorld * (viewportH / (2*tan(fov/2))) / -mv.z
-       令两者相等解出 sizeWorld，即可得到与原实现完全一致的缩放曲线。 */
   function makePool(max, tex, blending) {
     const quad = new THREE.InstancedBufferGeometry();
-    // 单位四边形，四个角 (-0.5..0.5)
     const quadPos = new Float32Array([
       -0.5, -0.5, 0,
        0.5, -0.5, 0,
@@ -898,8 +909,6 @@ const FX = (() => {
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         uTex: { value: tex },
-        /* 复刻原 gl_PointSize 的换算：把"像素高度"转成剪裁空间偏移，
-           与原实现使用完全相同的 300/-mv.z 缩放曲线，保证粒子视觉尺寸不变 */
         uPR: { value: Math.min(window.devicePixelRatio || 1, 2.0) },
         uHalfH: { value: innerHeight * 0.5 },
         uProjF: { value: 1 / Math.tan(70 * Math.PI / 360) }
@@ -925,12 +934,7 @@ const FX = (() => {
           vA  = iAlpha;
           vUV = aUV;
           vec4 mv = modelViewMatrix * vec4(iPos, 1.0);
-          /* ★ 与原 gl_PointSize = iSize * uPR * (300.0 / -mv.z) 等价的像素高度 */
           float px = iSize * uPR * (300.0 / max(-mv.z, 0.001));
-          /* 像素 → 相机空间偏移量推导：
-             相机空间高度 y 投影到 NDC 为 y * uProjF / -mv.z，NDC 全高 2 对应屏幕 H 像素，
-             故 px 像素对应的相机空间高度 world = px / H * 2 * (-mv.z) / uProjF
-             其中 H = uHalfH * 2，uProjF = 1 / tan(fov/2) */
           float world = px * (-mv.z) * 2.0 / (uHalfH * 2.0 * uProjF);
           float c = cos(iRot), sn = sin(iRot);
           vec2 corner = aCorner.xy * world;
@@ -960,13 +964,6 @@ const FX = (() => {
     });
     const mesh = new THREE.Mesh(quad, mat);
     mesh.frustumCulled = false;
-    /* ★ renderOrder 保持原值 500，不能动。
-       场景里粒子和水面都在透明队列，水面 depthWrite:false 不写深度，
-       靠 renderOrder 排序无法让水面遮挡粒子。真正起作用的是 depthTest:
-       - 与不透明物体（地形/停机坪/树木/机体）比较时，粒子会被正确遮挡 ← 你要的"该挡住就挡住"
-       - 水面之下的粒子由 stepPool 里的底边判定直接剔除，不会画出来。
-       上一版错误地把这里改成 9，导致粒子被地形挡住、同时水面又盖不住粒子，
-       所以显得"在地面图层之下"，现在改回 500。 */
     mesh.renderOrder = 500;
     scene.add(mesh);
     const state = new Array(max);
@@ -1063,13 +1060,11 @@ const FX = (() => {
     p.rise = o.rise !== undefined ? o.rise : 2.4;
   }
 
-  /* 机炮命中：打在金属上蹦火花——短促、亮白偏黄、不带烟、不上升，纯物理弹溅感 */
   function emitSparks(x, y, z, nx, ny, nz, count) {
     const n = count || 10;
     for (let i = 0; i < n; i++) {
       const spreadAng = Math.random() * Math.PI * 2;
       const spreadR = Math.random();
-      /* 沿法线方向为主，带一点随机散射 */
       const vx = nx * (4 + Math.random() * 7) + Math.cos(spreadAng) * spreadR * 3;
       const vy = ny * (4 + Math.random() * 7) + Math.random() * 2;
       const vz = nz * (4 + Math.random() * 7) + Math.sin(spreadAng) * spreadR * 3;
@@ -1079,16 +1074,14 @@ const FX = (() => {
         s0: 0.10 + Math.random() * 0.06, s1: 0.02,
         r: 1.0, g: 0.85 + Math.random() * 0.15, b: 0.55 + Math.random() * 0.3,
         alpha: 1.0,
-        drag: 3.5, rise: -6.0 /* 负值：受一点重力往下掉 */
+        drag: 3.5, rise: -6.0
       });
     }
   }
 
-/* 真正的爆炸：瞬时亮闪 → 火球扩张 → 黑烟柱 */
 function emitExplosion(x, y, z, scale) {
   const s = scale || 1;
 
-  /* ① 瞬时亮闪：极短命（0.08s）的亮黄白球，一帧内炸开 */
   for (let i = 0; i < Math.floor(10 * s); i++) {
     emitFire(
       x + (Math.random() - 0.5) * 1.2 * s,
@@ -1106,7 +1099,6 @@ function emitExplosion(x, y, z, scale) {
     );
   }
 
-  /* ② 火球扩张：亮橙色球，快速膨胀，0.3~0.6s */
   for (let i = 0; i < Math.floor(28 * s); i++) {
     const ang = Math.random() * Math.PI * 2;
     const rr = Math.random() * 2.2 * s;
@@ -1122,7 +1114,6 @@ function emitExplosion(x, y, z, scale) {
     });
   }
 
-  /* ③ 核心残焰：稍慢、更暗的红橙火，0.6~1.2s */
   for (let i = 0; i < Math.floor(16 * s); i++) {
     const ang = Math.random() * Math.PI * 2;
     const rr = Math.random() * 3.0 * s;
@@ -1138,7 +1129,6 @@ function emitExplosion(x, y, z, scale) {
     });
   }
 
-  /* ④ 浓黑烟柱：爆炸后持续上升 */
   for (let i = 0; i < Math.floor(26 * s); i++) {
     const ang = Math.random() * Math.PI * 2;
     const rr = Math.random() * 2.6 * s;
@@ -1171,7 +1161,6 @@ function emitExplosion(x, y, z, scale) {
       });
     }
   }
-/* 机炮曳光弹：有重力下坠、无阻力，长寿命可见 */
 function emitTracer(x, y, z, dx, dy, dz) {
   const p = alloc(firePool);
   p.on = true;
@@ -1186,10 +1175,9 @@ function emitTracer(x, y, z, dx, dy, dz) {
   p.a0 = 1.0;
   p.rot = 0; p.rotV = 0;
   p.drag = 0;
-  p.rise = -9.81;   /* 关键：加下坠，模拟重力 */
+  p.rise = -9.81;
 }
 
-  /* 核心舱着火 —— 调用方传「核心舱真实世界位置」和强度 */
   function emitCoreFire(px, py, pz, intensity) {
     const k = clamp(intensity || 1, 0.4, 2.0);
     for (let i = 0; i < Math.floor(3 * k); i++) {
@@ -1222,9 +1210,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
     }
   }
 
-  /* 每帧对一架 craft 发射：损伤烟 + 核心舱火
-     参数直接是 craft 的引用（含 isPlayer 判断），
-     以及它的核心舱对象（解体后仍能拿到真实位置） */
   let emitAccum = 0;
   function emitForCraft(dt, craft, coreObj) {
     emitAccum += dt;
@@ -1234,10 +1219,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
     const isPlayer = craft.isPlayer;
     const S = isPlayer ? H : craft.S;
     const hp = S.pos;
-    /* ★ 入水判定：按机体位置判定，一旦机体没入水面就停止发射火焰与烟雾。
-       原来用「主旋翼头 y < WATER_Y + 1」判定，既把水面之上的机身也算成入水
-       （导致水面上方还在冒烟），又在补丁里重复执行了一次 emitAccum += dt，
-       使发射频率翻倍。这里一并修正。 */
     if (hp.y < WATER_Y + 0.6) return;
     const hullDmg  = isPlayer ? hullDamage  : S.hullDamage;
     const rotorDmg = isPlayer ? rotorDamage : S.rotorDamage;
@@ -1251,7 +1232,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
     if (d2 > 400 * 400) return;
     const distFade = clamp(1 - (Math.sqrt(d2) - 100) / 300, 0.3, 1);
 
-    /* 损伤烟：机身 + 主旋翼（未解体时） */
     if (!shat) {
       if (hullDmg > 0.35) {
         const n = Math.floor(1 + clamp(hullDmg, 0.4, 1.2) * 2);
@@ -1293,12 +1273,8 @@ function emitTracer(x, y, z, dx, dy, dz) {
       }
     }
 
-    /* 核心舱火：撞地坠毁（未解体）+ 解体之后，都要跟着核心舱世界坐标 */
     if (crashed) {
       const burnK = shat ? 1.6 : (1 + clamp(S.crashTimer / 4, 0, 1) * 0.8);
-      /* coreObj 是核心舱 mesh（fuselageMesh / AC.fuselage），
-         解体后它的 parent 变成 scene，position 是世界坐标；
-         未解体时还在 heliGroup/AC.group 里，需要 getWorldPosition */
       let cx = hp.x, cy = hp.y + 0.4, cz = hp.z;
       if (coreObj) {
         const wp = new THREE.Vector3();
@@ -1340,10 +1316,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
         const col = new THREE.Color().setHSL(0.08 + t * 0.06, 1, 0.35 + t * 0.5);
         r = col.r; g = col.g; b = col.b;
       }
-      /* ★ 不再手工剔除水下粒子。
-         水面已改为 depthWrite: true，粒子又在水面之后绘制（renderOrder 500 > 10），
-         粒子伸到水面以下的部分会由深度测试自动裁掉，形成"烟被水面挡住"的正确观感。
-         手工按 p.y 剔除会让半沉入水面的粒子整块凭空消失，反而不真实。 */
       pool.pos[write * 3]     = p.x;
       pool.pos[write * 3 + 1] = p.y;
       pool.pos[write * 3 + 2] = p.z;
@@ -1368,9 +1340,6 @@ function emitTracer(x, y, z, dx, dy, dz) {
     pool.iRot.needsUpdate   = true;
   }
 
-  /* ★ 视口高度变化时同步 uHalfH，保证像素尺寸换算基准正确。
-     原实现用 300.0 / -mv.z 固定曲线，与视口高度无关，所以这里只更新
-     uHalfH 供像素→相机空间换算使用，不改变缩放曲线本身。 */
   function updateSizeScale() {
     const H = renderer.domElement.height || innerHeight;
     const halfH = H * 0.5;
@@ -1447,78 +1416,51 @@ scene.add(cloudSunFar); scene.add(cloudSunFar.target);
    ===================================================================== */
 function terrainRaw(x, z) {
   const r = Math.hypot(x, z);
-  /* ★ 停机坪：半径 30m 内强制为 0（比停机坪 26m 大一圈，留过渡） */
   if (r < 30) {
-    /* 26m 内 = 0，26~30m 平滑过渡到原地形 */
     if (r < 26) return 0;
-    const t = (r - 26) / 4;             /* 0→1 */
-    const smooth = t * t * (3 - 2 * t);  /* 平滑曲线 */
+    const t = (r - 26) / 4;
+    const smooth = t * t * (3 - 2 * t);
     const orig = terrainRawBase(x, z);
     return orig * smooth;
   }
   return terrainRawBase(x, z);
 }
 function terrainRawBase(x, z) {
-  /* ===== 海岛生成 =====
-     8km × 8km 边到边，水面 y = -20
-     不规则海岸线（半岛 + 海湾）
-     中等山脉，不挤中心
-     最高约 430 米 */
-  const HALF = 4000;                 /* 半边长，4km */
-  const SEA = -20;                   /* 水面高度 */
+  const HALF = 4000;
+  const SEA = -20;
 
-  /* ① 大陆遮罩：用噪声生成不规则岛形
-     - 低频噪声决定海岸线起伏（半岛 / 海湾）
-     - 再乘一个"离中心衰减"，保证岛在 8km 内 */
   const nx = x * 0.00042;
   const nz = z * 0.00042;
-  /* 两层噪声叠出海岸线细节 */
   let coastNoise = fbm(nx + 31.7, nz - 12.3, 4) * 0.62
                  + fbm(x * 0.00115 - 7.1, z * 0.00115 + 4.9, 3) * 0.38;
-  /* coastNoise 约 -1~1，映射到 0~1 */
   coastNoise = coastNoise * 0.5 + 0.5;
 
-  /* 离中心归一化距离：正方形边到边，用切比雪夫距离更方 */
   const dx = Math.abs(x) / HALF;
   const dz = Math.abs(z) / HALF;
-  const edgeDist = Math.max(dx, dz);           /* 0=中心, 1=边缘 */
-  /* 基础衰减：中心 1，边缘 0 */
+  const edgeDist = Math.max(dx, dz);
   let landMask = 1 - smoothstep(0.55, 1.0, edgeDist);
-  /* 叠加噪声，让海岸线不规则（半岛 / 海湾） */
   landMask = landMask * 0.72 + coastNoise * 0.42 - 0.16;
-  /* 夹到 0~1，低于 0 就是海 */
   landMask = clamp(landMask, 0, 1);
-  /* 用 smoothstep 让海陆过渡柔和 */
   landMask = smoothstep(0.02, 0.35, landMask);
 
-  /* ② 山脉走向：独立噪声，山不挤中心
-     山脉带 = 低频噪声的脊线 */
   const mn = fbm(x * 0.00036 + 88.1, z * 0.00036 - 44.7, 4) * 1.55;
 let ridge = clamp(1 - Math.abs(mn), 0, 1);
 ridge = Math.pow(ridge, 3.0);
-/* 稀疏遮罩：只有噪声特别突出的地方才长山 */
 const sparse = smoothstep(0.30, 0.80, ridge);
 ridge *= sparse;
-/* 出生点衰减 */
 const spawnDist = Math.hypot(x, z);
 const spawnFlat = smoothstep(200, 800, spawnDist);
-/* ★ 山高：用平方根做缓坡，山脚自然延伸，不拔地而起 */
 const mountain = Math.pow(ridge, 0.65) * 430 * spawnFlat;
 let h = mountain;
-  /* ③ 丘陵 + 平原起伏 */
   h += fbm(x * 0.00085 + 3.3, z * 0.00085 - 8.1, 4) * 42;
   h += fbm(x * 0.0042 + 11.3, z * 0.0042 - 5.7, 3) * 8;
   h += perlin2(x * 0.021, z * 0.021) * 1.7;
 
-  /* ④ 海陆合成：陆地用 h，海里沉到 SEA 以下
-     landMask = 1 → 纯陆地；landMask = 0 → 纯海 */
-  /* 陆地基准高度 0，海面 -20 */
-  const landH = h + 4;               /* 陆地整体抬高 4 米，确保在海面上 */
-  const seaH = SEA - 40;             /* 海床比海面低 40 米 */
+  const landH = h + 4;
+  const seaH = SEA - 40;
   let out = lerp(seaH, landH, landMask);
 
-  /* ⑤ 海滩过渡：靠近水面的陆地压平一点，形成沙滩 */
-  const beachK = smoothstep(SEA + 14, SEA - 2, out);   /* 越接近水面越接近 1 */
+  const beachK = smoothstep(SEA + 14, SEA - 2, out);
   out = lerp(out, SEA + 6, beachK * 0.72);
 
   return out;
@@ -1559,7 +1501,6 @@ function latticeHeight(x, z, s) {
 const LOD_G0 = 4, LOD_N = 64, LOD_HOLE = 14, LOD_RAMP = 3, LOD_LV = 8;
 const LOD_HALF = LOD_N >> 1;
 const LOD = [];
-/* ===== 地形配色：三套风格 ===== */
 const TERRAIN_STYLES = {
   hill: {
     grass: new THREE.Color(0x6aa84f),
@@ -1583,11 +1524,10 @@ const TERRAIN_STYLES = {
     water: 0x5cc8b8
   }
 };
-/* ★ 每套风格对应的树叶色（HSL：色相/饱和/亮度范围） */
 const TREE_STYLES = {
-  hill:   { h: [0.26, 0.32], s: [0.36, 0.60], l: [0.14, 0.28] },  /* 绿 */
-  snow:   { h: [0.30, 0.38], s: [0.06, 0.18], l: [0.55, 0.75] },  /* 灰白 */
-  desert: { h: [0.08, 0.14], s: [0.30, 0.50], l: [0.35, 0.50] }   /* 土黄 */
+  hill:   { h: [0.26, 0.32], s: [0.36, 0.60], l: [0.14, 0.28] },
+  snow:   { h: [0.30, 0.38], s: [0.06, 0.18], l: [0.55, 0.75] },
+  desert: { h: [0.08, 0.14], s: [0.30, 0.50], l: [0.35, 0.50] }
 };
 function getTreeStyle() {
   return TREE_STYLES[settings.terrainStyle] || TREE_STYLES.hill;
@@ -1645,20 +1585,16 @@ function lodBuild(L) {
       pos[o + 1] = hc;
       nor[o] = -gx * inv; nor[o + 1] = inv; nor[o + 2] = -gz * inv;
 const st = getTerrainStyle();
-/* 山色：150~340 米渐变到 high 色 */
 const tt = smoothstep(150, 340, hc);
 const k2 = tt * tt;
 let cr = lerp(st.grass.r, st.high.r, k2);
 let cg = lerp(st.grass.g, st.high.g, k2);
 let cb = lerp(st.grass.b, st.high.b, k2);
-/* ★ 沙滩：只在 -6 ~ 4 米之间，水面附近一小圈 */
 const sandK = smoothstep(4, -6, hc);
-/* ★ 水下：低于 -6 米，压暗成水下色 */
 const underK = smoothstep(-6, -18, hc);
 cr = lerp(st.sand.r, cr, 1 - sandK);
 cg = lerp(st.sand.g, cg, 1 - sandK);
 cb = lerp(st.sand.b, cb, 1 - sandK);
-/* 水下压暗 */
 cr = lerp(cr, cr * 0.45, underK);
 cg = lerp(cg, cg * 0.55, underK);
 cb = lerp(cb, cb * 0.70, underK);
@@ -1764,61 +1700,6 @@ function initLOD() {
     lodBuild(LOD[k]);
   }
 }
-/* 出生点永久高精度地块：钉在原点，静态、永不更新（4m/8m/16m 三级，覆盖 ±512m） */
-const ORIGIN_PATCH = [];
-function initOriginPatch() {
-  const n = LOD_N, w = n + 1, nv = w * w, LV = 3;
-  for (let k = 0; k < LV; k++) {
-    const s = LOD_G0 << k;
-    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3);
-    const hm = new Float32Array(nv);
-    for (let j = 0; j <= n; j++) {
-      for (let i = 0; i <= n; i++) {
-        const idx = j * w + i, x = (i - LOD_HALF) * s, z = (j - LOD_HALF) * s, h = terrainRaw(x, z);
-        hm[idx] = h;
-        pos[idx * 3] = x; pos[idx * 3 + 1] = h; pos[idx * 3 + 2] = z;
-      }
-    }
-    for (let j = 0; j <= n; j++) {
-      const jd = (j > 0 ? j - 1 : 0) * w, ju = (j < n ? j + 1 : n) * w, jr = j * w;
-      for (let i = 0; i <= n; i++) {
-        const idx = jr + i, o = idx * 3;
-        const gx = (hm[jr + (i < n ? i + 1 : n)] - hm[jr + (i > 0 ? i - 1 : 0)]) / (2 * s);
-        const gz = (hm[ju + i] - hm[jd + i]) / (2 * s);
-        const inv = 1 / Math.sqrt(gx * gx + 1 + gz * gz);
-        nor[o] = -gx * inv; nor[o + 1] = inv; nor[o + 2] = -gz * inv;
-        const tt = smoothstep(150, 340, hm[idx]), k2 = tt * tt;
-        col[o] = gR + (sR - gR) * k2;
-        col[o + 1] = gG + (sG - gG) * k2;
-        col[o + 2] = gB + (sB - gB) * k2;
-      }
-    }
-    const idx = [], c0 = LOD_HALF - LOD_HOLE, c1 = LOD_HALF + LOD_HOLE;
-    for (let j = 0; j < n; j++) {
-      for (let i = 0; i < n; i++) {
-        if (k > 0 && i >= c0 && i < c1 && j >= c0 && j < c1) continue;
-        const a = j * w + i, b = a + 1, c = a + w, d = c + 1;
-        idx.push(a, c, d, a, d, b);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setIndex(idx);
-    const mat = new THREE.MeshLambertMaterial({
-      vertexColors: true, flatShading: true,
-      polygonOffset: true, polygonOffsetFactor: 0,
-      polygonOffsetUnits: -40 - 2 * (LV - k)
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.frustumCulled = true;
-    mesh.receiveShadow = k <= 2;
-    mesh.castShadow = false;
-    scene.add(mesh);
-    ORIGIN_PATCH.push(mesh);
-  }
-}
 function lodUpdate(px, pz) {
   const high = H.pos.y > 6000;
   for (let k = 0; k < LOD_LV; k++) {
@@ -1869,14 +1750,8 @@ function terrainNormal(x, z, out) {
   const cr = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 1.8), mk);
   cr.rotation.x = -Math.PI / 2; cr.position.y = 0.13; scene.add(cr);
 }
-/* ===== 水面===== */
+/* ===== 水面 ===== */
 const WATER_Y = -6;
-/* ★ 水面必须写深度（depthWrite: true），否则它不参与深度缓冲，
-   粒子无论 depthTest 怎么设都无法被水面正确遮挡 —— 这是之前
-   "粒子永远压在水面上 / 又被地面挡住" 反复修不好的根本原因。
-   代价：水面会正确挡住它下方的水下地形（观感上这是对的，水下本来
-   就该被水遮住）。水色用不透明度 0.78 的半透明蓝，仍能看到浅水区的
-   地形轮廓，因为地形在水面【之上】的部分不受影响。 */
 const waterMesh = (() => {
   const waterGeo = new THREE.PlaneGeometry(60000, 60000, 1, 1);
   waterGeo.rotateX(-Math.PI / 2);
@@ -1884,7 +1759,6 @@ const waterMesh = (() => {
     color: 0x00349C,
     transparent: true,
     opacity: 0.78,
-    /* ★ 关键改动：由 false 改为 true，让水面参与深度测试与写入 */
     depthWrite: true,
     depthTest: true,
     side: THREE.DoubleSide,
@@ -1894,9 +1768,6 @@ const waterMesh = (() => {
   });
   const m = new THREE.Mesh(waterGeo, waterMat);
   m.position.y = WATER_Y;
-  /* 透明队列内先画水面（10），再画粒子（500）。
-     因为水面现在写深度，后画的粒子在水面之下的部分会被深度测试剔除，
-     符合"该挡住就挡住"。 */
   m.renderOrder = 10;
   scene.add(m);
   return m;
@@ -1935,8 +1806,7 @@ const _treeBufA = [], _treeBufB = [], _treeBufC = [];
     if (sceneRandom() > dens * dens * 2.3) continue;
     const gy = terrainHeight(x, z);
     if (gy > 450) continue;
-if (gy < 3) continue;          /* ★ 太低（水边/水下）不长树 */
-    /* ★ 坡度判断：陡坡不长树，缓坡才长 */
+if (gy < 3) continue;
 if (Math.abs(terrainHeight(x + 20, z) - gy) > 14) continue;
 if (Math.abs(terrainHeight(x, z + 20) - gy) > 14) continue;
     const h = 6.5 + sceneRandom() * 10 + dens * 6;
@@ -1944,7 +1814,7 @@ if (Math.abs(terrainHeight(x, z + 20) - gy) > 14) continue;
     TREES.push({
       x, z, gy: gy - 0.35, d: dens, h, w,
       trunkH: h * 0.30,
-      r: w * 0.62 + 0.30,          // 碰撞半径
+      r: w * 0.62 + 0.30,
       col: 0x2f4a1e,
       idx: TREES.length,
       fallen: false, falling: false, tip: 0, tipVel: 0, axis: null, obj: null
@@ -1984,7 +1854,6 @@ col.setHSL(
     a.push(t.idx);
   }
 }
-/* ★ 切换风格时，重新给所有树着色 */
 function recolorTrees() {
   if (!treeLeafInst) return;
   const ts = getTreeStyle();
@@ -2035,7 +1904,6 @@ function makeTreeObject(t) {
   g.position.set(t.x, t.gy, t.z);
   return g;
 }
-/* 撞倒树：dir 为倒向（水平），speed 为撞击速度 */
 function fellTree(t, dirX, dirZ, speed) {
   if (t.fallen || t.falling) return;
   let l = Math.hypot(dirX, dirZ);
@@ -2054,7 +1922,6 @@ function fellTree(t, dirX, dirZ, speed) {
 function stepTreeFall(dt) {
   for (let i = treeFallList.length - 1; i >= 0; i--) {
     const t = treeFallList[i];
-    // 绕根部倒下的倒立摆：α = (3g/2L)·sinθ
     t.tipVel += (1.5 * 9.81 / Math.max(4, t.h)) * Math.sin(t.tip) * dt;
     t.tip += t.tipVel * dt;
     if (t.tip >= Math.PI * 0.5) {
@@ -2068,7 +1935,7 @@ function stepTreeFall(dt) {
 }
 
 /* =====================================================================
-   8. 云层
+   8. 云层（只保留高空两层，删除低空厚云幕）
    ===================================================================== */
 function makeCloudTexture(res, seed) {
   const cv = document.createElement('canvas');
@@ -2103,7 +1970,6 @@ function makeCloudTexture(res, seed) {
 }
 const cloudLayers = [];
 {
-  /* 两层透明度越接近，远近观感越统一；都设成 1.0 则完全不透（颜色绝对一致） */
   const cfg = [
     { y: 900,  repeat: 6, size: 26000, opacity: 0.90, seed: 9137 },
     { y: 1600, repeat: 5, size: 30000, opacity: 0.90, seed: 4421 }
@@ -2114,7 +1980,7 @@ const cloudLayers = [];
     const mat = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, opacity: c.opacity,
       depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.06, color: 0xffffff,
-      fog: false            /* 关键：云不再吃雾，远处不会被雾染成另一种颜色 */
+      fog: false
     });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(c.size, c.size), mat);
     mesh.rotation.x = -Math.PI / 2; mesh.position.y = c.y;
@@ -2219,7 +2085,6 @@ function makeMats(pal, opts = {}) {
     litR:   new THREE.MeshBasicMaterial({ color: 0xc01a28 }),
     litB:   new THREE.MeshBasicMaterial({ color: 0x1f5cff }),
     lens:   new THREE.MeshPhongMaterial({ color: 0x0a1016, specular: 0xbfe6ff, shininess: 240 }),
-    /* 现实外灯：左红 / 右绿 / 尾白 / 频闪白 */
     navR:   new THREE.MeshBasicMaterial({ color: 0xff2b2b }),
     navG:   new THREE.MeshBasicMaterial({ color: 0x28ff60 }),
     navW:   new THREE.MeshBasicMaterial({ color: 0xf4f8ff }),
@@ -2588,13 +2453,11 @@ function drawCockpitMap() {
 }
 
 /* =====================================================================
-   11. 现实外灯（左红 / 右绿 / 尾白 / 顶部红防撞 / 垂尾白频闪）
-   默认始终常亮；想看频闪把 NAV_BLINK 改成 true
+   11. 现实外灯
    ===================================================================== */
 const NAV_BLINK = false;
 const NAV_STROBES = [];
 function addNavLights(group, mats, cfg) {
-/* 薄片式灯罩：沿左右方向压扁的圆片，只往外凸 1cm 左右，不会穿进座舱 */
 const lens = (mat, r, p) => {
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.026, 12), mat);
   m.rotation.z = Math.PI / 2;
@@ -2641,8 +2504,6 @@ if (cfg.interiorTint) {
   if (mats.cabin.emissive)  mats.cabin.emissive.copy(tint).multiplyScalar(0.10);
   if (mats.cabin2.emissive) mats.cabin2.emissive.copy(tint).multiplyScalar(0.06);
 }
-  /* 每个机型独立一份内饰材质：复制 mats.cabin / cabin2，
-     这样某机型（如 AH1W）改内饰颜色时不会污染 206/407 的共享材质。 */
   if (!mats._cabinOwned) {
     mats.cabin  = mats.cabin.clone();
     mats.cabin2 = mats.cabin2.clone();
@@ -2729,9 +2590,6 @@ if (cfg.interiorTint) {
 
 
 
-/* ---- 座舱航图屏（GI 275 风格，装在仪表盘上方、座舱顶棚前沿） ----
-   整块用 Group 包住，统一向主驾驶偏转（mapYaw），不散架
-*/
 const sizeK = cfg.mapScale || 1.0;
 const MAP_R = 0.095 * sizeK;
 const mapTilt = -Math.PI / 2 + 1.45;
@@ -2742,31 +2600,25 @@ const mapPos = new THREE.Vector3(
   cfg.panelZ + 0.45
 );
 
-/* 整块地图（支架 + bezel + 屏 + 玻璃罩）统一挂到 Group 上 */
 const mapGroup = new THREE.Group();
 mapGroup.position.copy(mapPos);
 mapGroup.rotation.set(mapTilt, mapYaw, 0);
 cockpit.add(mapGroup);
 cockpit.userData.mapGroup = mapGroup;
 
-/* 顶部悬挂支架：从座舱顶棚往下伸一根短臂，吊住地图屏 */
 {
   const armMat = new THREE.MeshLambertMaterial({ color: 0x14191f });
-  /* 顶棚横梁（沿座舱顶棚的横向安装条） */
   const rail = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.03, 0.05), armMat);
   rail.position.set(0, 0.28, -0.02);
   mapGroup.add(rail);
-  /* 竖直吊臂（从横梁往下，到屏顶部） */
   const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.30, 8), armMat);
   arm.position.set(0, 0.13, -0.02);
   mapGroup.add(arm);
-  /* 屏顶连接块（吊臂底端贴到屏顶部） */
   const mount = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.03), armMat);
   mount.position.set(0, -0.01, -0.03);
   mapGroup.add(mount);
 }
 
-/* 外圈 bezel（深色圆环） */
 {
   const bezelGeo = new THREE.RingGeometry(MAP_R, MAP_R + 0.013, 48);
   const bezelMat = new THREE.MeshLambertMaterial({ color: 0x0d1116 });
@@ -2776,7 +2628,6 @@ cockpit.userData.mapGroup = mapGroup;
   mapGroup.add(bezel);
 }
 
-/* 地图面 */
 {
   const mapGeo = new THREE.CircleGeometry(MAP_R, 48);
   const mapMat = new THREE.MeshBasicMaterial({ map: mapTex, side: THREE.DoubleSide });
@@ -2934,26 +2785,24 @@ function buildModel206(def) {
   const finGeo = buildHull(FIN_PROFILE, 20, null, true);
   finGeo.rotateX(-Math.PI / 2);
 
-  /* ★ 顶面靠后：按高度线性偏移每个顶点，顶面相对底部往后挪 0.40m */
   {
     const pos = finGeo.attributes.position;
-    const SHIFT = 0.40;   // 顶部往后挪多少米
-    const TOP_Y = 1.30;   // 垂尾高度（剖面表最后一个 z 值）
+    const SHIFT = 0.40;
+    const TOP_Y = 1.30;
     for (let i = 0; i < pos.count; i++) {
       const y = pos.getY(i);
-      const t = Math.max(0, Math.min(1, y / TOP_Y));  // 0=底部, 1=顶部
-      pos.setZ(i, pos.getZ(i) + t * SHIFT);           // 越往上越往后
+      const t = Math.max(0, Math.min(1, y / TOP_Y));
+      pos.setZ(i, pos.getZ(i) + t * SHIFT);
     }
     pos.needsUpdate = true;
     finGeo.computeVertexNormals();
   }
 
-  const fin = new THREE.Mesh(finGeo, mats.body);   /* 白色 */
+  const fin = new THREE.Mesh(finGeo, mats.body);
   fin.position.set(0, 0.55, 6.00);
   fin.castShadow = true;
   group.add(fin);
 
-  /* 水平安定面 */
   const stab = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.07, 0.50), mats.body);
   stab.position.set(0, 0.54, 4.62); group.add(stab);
 }
@@ -3050,12 +2899,10 @@ function buildModel407(def) {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.62, 10), mats.metal);
     mast.position.set(0, 2.42, ROTOR_Z); group.add(mast);
   }
-  /* 机身两侧警灯条 */
   for (const s of [-1, 1]) {
     const st = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.10, 0.34), s > 0 ? mats.litR : mats.litB);
     st.position.set(s * 1.00, 0.10, 0.45); group.add(st);
   }
-  /* 机侧 POLICE 贴片（左右各一，朝向保证不镜像） */
   {
     const cv = document.createElement('canvas');
     cv.width = 512; cv.height = 128;
@@ -3079,7 +2926,6 @@ function buildModel407(def) {
       group.add(pl);
     }
   }
-  /* 机腹探照灯 */
   {
     const mount = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.10, 0.24), mats.dark);
     mount.position.set(0, -0.60, -2.10); group.add(mount);
@@ -3091,11 +2937,9 @@ beam.position.set(0, -0.72, -2.33);
 beam.target.position.set(0, -20, -6);
 group.add(beam);
 group.add(beam.target);
-/* 把 beam 挂到 group 上，供外部开关 */
 group.userData.searchLight = beam;
     lens.position.set(0, -0.72, -2.33); group.add(lens);
   }
-  /* 光电吊舱 */
   {
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.20, 16, 12), mats.dark);
     ball.position.set(0, -0.42, -2.86); group.add(ball);
@@ -3154,7 +2998,6 @@ group.userData.searchLight = beam;
   }
   group.add(tailRotor);
   {
-    /* 407 垂尾：buildHull 翼型，顶面后移，跟 206 同款 */
 const FIN_PROFILE_407 = [
   { z: 0.00, w: 0.065, h: 0.48, y: 0.00 },
   { z: 0.45, w: 0.058, h: 0.44, y: 0.00 },
@@ -3245,7 +3088,6 @@ function buildModel407M(def) {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.62, 10), mats.metal);
     mast.position.set(0, 2.42, ROTOR_Z); group.add(mast);
   }
-/* 短翼 + 挂架 */
 for (const s of [-1, 1]) {
   const wing = new THREE.Mesh(new THREE.BoxGeometry(1.60, 0.16, 1.05), mats.body);
   wing.position.set(s * 1.80, 0.02, -0.30);
@@ -3254,7 +3096,6 @@ for (const s of [-1, 1]) {
   const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.52), mats.body2);
   pylon.position.set(s * 2.30, -0.09, -0.30); group.add(pylon);
 }
-/* 左侧：M134 六管机枪吊舱 */
 {
   const podBody = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.90, 14), mats.body2);
   podBody.rotation.x = Math.PI / 2;
@@ -3270,7 +3111,6 @@ for (const s of [-1, 1]) {
     group.add(barrel);
   }
 }
-/* 右侧：2.75 英寸 7 管火箭巢 */
 {
   const podBody = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.95, 16), mats.body2);
   podBody.rotation.x = Math.PI / 2;
@@ -3288,7 +3128,6 @@ for (const s of [-1, 1]) {
     group.add(tube);
   }
 }
-  /* 光电吊舱 */
   {
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.20, 16, 12), mats.dark);
     ball.position.set(0, -0.42, -2.86); group.add(ball);
@@ -3556,7 +3395,6 @@ function applyAircraftParams(def) {
   INV_INERTIA = 1 / INERTIA;
   COL_POINTS = def.colPoints.map(cp => ({ p: cp.p.clone(), r: cp.r, kind: cp.kind, cool: 0 }));
 }
-/* 注意：H / input 现在用 let 声明，NPC 会被临时“换脑”复用同一套 physics() */
 let H = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(),
   quat: new THREE.Quaternion(), avel: new THREE.Vector3(),
@@ -3565,20 +3403,18 @@ let H = {
 };
 let input = { lx: 0, ly: 0, rx: 0, ry: 0 };
 let assist = true, camMode = 0, simTime = 0, milestoneIdx = 0;
-/* ★ 键盘输入：按键状态 + 期望值（慢慢推） */
 const keys = {};
 const kbInput = { lx: 0, ly: 0, rx: 0, ry: 0 };
-const KB_SPEED = 3.0;      /* 摇杆每秒推到满的速度，越小越慢 */
-const KB_RETURN = 4.0;     /* 松手后回中的速度 */
-/* 电传损坏/失控状态 */
-let assistDamaged = false;       /* hullDamage 达阈值 → 反复失效 */
-let assistDamagedTimer = 0;      /* 损坏后还能用多久 */
-let controlLoss = false;         /* rotorDamage 达阈值 → 辅助仅微弱发力 */
-let assistLocked = false;        /* 一旦损坏，辅助锁死，直到重置 */
-let assistWarned = false;        /* 只提示一次 */
+const KB_SPEED = 3.0;
+const KB_RETURN = 4.0;
+let assistDamaged = false;
+let assistDamagedTimer = 0;
+let controlLoss = false;
+let assistLocked = false;
+let assistWarned = false;
 let controlWarned = false;
-const ASSIST_DMG_THRESHOLD = 0.50;    /* 机体损伤阈值 */
-const CONTROL_LOSS_THRESHOLD = 0.50;  /* 旋翼损伤阈值：掉一片桨叶就触发失控 */
+const ASSIST_DMG_THRESHOLD = 0.50;
+const CONTROL_LOSS_THRESHOLD = 0.50;
 let inMenu = true, hangarOpen = false;
 let engineOn = false, rotorSpool = 0, rotorAngle = 0, tailAngle = 0, groundContacts = 0;
 
@@ -3742,7 +3578,7 @@ function detachPart(obj, impulse, spin, isFuselage) {
   if (!obj.parent) return;
   let total = 0;
   for (const c of allCrafts) total += c.debrisBodies ? c.debrisBodies.length : 0;
-  if (total >= 1000) { obj.visible = false; return; }   // 全局上限，防刚体洪水
+  if (total >= 1000) { obj.visible = false; return; }
   obj.updateWorldMatrix(true, true);
   const half = measureHalf(obj);
   obj.getWorldPosition(_v1);
@@ -3760,7 +3596,7 @@ function detachPart(obj, impulse, spin, isFuselage) {
     obj, half, mass, isFuselage: !!isFuselage,
     vel: impulse.clone(), avel: spin.clone(), resting: false
   };
-  if (world && CANNON) {                     // 玩家 / NPC 都给真刚体
+  if (world && CANNON) {
     const body = makeBodyForObject(obj, mass, impulse, spin, !!isFuselage);
     if (body) {
       body.allowSleep = true;
@@ -3832,11 +3668,10 @@ function shatterBody() {
   if (shattered || !AC) return;
   shattered = true;
   
-/* ★ 大爆炸 */
 FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.4);
   const baseVel = H.vel.clone();
   const omegaW = H.avel.clone().applyQuaternion(H.quat);
-  let budget = 22;                       // 最多抛 22 块，超出直接隐藏，避免网格洪水
+  let budget = 22;
   const throwPart = (obj, extra, isFus) => {
     if (!obj || !obj.parent) return;
     if (budget <= 0) { obj.visible = false; return; }
@@ -3857,7 +3692,7 @@ FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.4);
     if (child === AC.fuselage) continue;
     if (child === AC.mainRotor) {
       for (const b of AC.mainBlades) b.userData.detached = true;
-      throwPart(AC.mainRotor, 1.0, false);      // 整个旋翼头一块抛出
+      throwPart(AC.mainRotor, 1.0, false);
       continue;
     }
     if (child === AC.tailRotor) {
@@ -3865,7 +3700,7 @@ FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.4);
       throwPart(AC.tailRotor, 1.0, false);
       continue;
     }
-    throwPart(child, 0.9, false);               // 座舱等整体一块
+    throwPart(child, 0.9, false);
   }
   AC.group.visible = false;
   toast('💥 坠毁', 3, true);
@@ -3908,12 +3743,11 @@ function simpleStepDebris(d, dt) {
     }
   }
 }
-/* 主循环里每帧调用一次：世界只走一步，然后同步所有残骸 */
 function stepAllDebris(dt) {
   let hasBody = false;
   for (const c of allCrafts) if (c.debrisBodies && c.debrisBodies.length) { hasBody = true; break; }
   if (world && CANNON && hasBody) {
-    world.step(1 / 60, dt, 4);                 // ← 一帧只走这一次
+    world.step(1 / 60, dt, 4);
     for (const c of allCrafts) {
       for (const d of c.debrisBodies) {
         if (!d.body) continue;
@@ -3924,7 +3758,7 @@ function stepAllDebris(dt) {
     }
   }
   for (const c of allCrafts) {
-    for (const d of c.debris) simpleStepDebris(d, dt);   // 没刚体的兜底
+    for (const d of c.debris) simpleStepDebris(d, dt);
   }
 }
 function updateDebris(dt) {
@@ -3937,7 +3771,7 @@ function updateDebris(dt) {
                            d.body.quaternion.z, d.body.quaternion.w);
     }
   }
-  updateDebrisSimple(dt);   // 没有刚体的（NPC 残骸）走轻量积分
+  updateDebrisSimple(dt);
 }
 let forceSimpleDebris = false;
 
@@ -3963,7 +3797,6 @@ function checkBladeGround() {
         toast('⚠ 主旋翼桨叶 ' + (i + 1) + ' 号 触地折断', 2.2, true);
         break;
       }
-      /* —— 撞树：桨叶扫到树干 / 树冠 —— */
       if (spinning && py < gh + 26) {
         treesNear(px, pz, _treeBufC);
         let hitTree = null;
@@ -4055,7 +3888,6 @@ function solveGroundContacts(dt) {
 
 if (cp.cool <= 0 && vn < 0) {
   const impact = -vn;
-  /* 地面 ≈ 无限大质量：μ 取自身质量，能量全由自己吸收 */
   const dmg = impactDamage(MASS, Infinity, impact, cp.kind, DMG_GROUND.Emin, DMG_GROUND.Eref);
   if (dmg > 0.001) {
     cp.cool = 0.6;
@@ -4069,35 +3901,82 @@ if (cp.cool <= 0 && vn < 0) {
 }
 
 /* =====================================================================
-   20. 飞行物理（玩家与 NPC 共用）
+   20. 空气动力（物理）：把风当作真实的空气速度
+   ===================================================================== */
+const _aQ = new THREE.Quaternion();
+const _aOmega = new THREE.Vector3(), _aCen = new THREE.Vector3(), _aCenW = new THREE.Vector3();
+const _aR = new THREE.Vector3(), _aP = new THREE.Vector3(), _aV = new THREE.Vector3();
+const _aT = new THREE.Vector3(), _aT2 = new THREE.Vector3(), _aT3 = new THREE.Vector3();
+const _aAir = new THREE.Vector3(), _aVR = new THREE.Vector3(), _aF = new THREE.Vector3();
+const _aFx = new THREE.Vector3(), _aMx = new THREE.Vector3();
+
+/* 对每个机体参考点单独采样当地空气速度，用「相对气流」算阻力。
+   这样做的物理意义：
+     · 平飞时各点气流一致 → 合阻力＝原来的整体阻力
+     · 机动时各点速度不同 → 自然产生角速度阻尼
+     · 风场随高度/位置变化 → 自然产生风切变力矩（颠簸感）
+   所有气动力都来自"空气相对速度"，不再是程序化的假推力。 */
+function applyAerodynamics(dt, t) {
+  const n = COL_POINTS.length;
+  if (!n) return;
+  const invN = 1 / n;
+  const k = H.rho * invN;
+  const qInv = _aQ.copy(H.quat).invert();
+  const omegaW = _aOmega.copy(H.avel).applyQuaternion(H.quat);
+
+  _aCen.set(0, 0, 0);
+  for (let i = 0; i < n; i++) _aCen.add(COL_POINTS[i].p);
+  _aCen.multiplyScalar(invN);
+  _aCenW.copy(_aCen).applyQuaternion(H.quat);
+
+  _aFx.set(0, 0, 0);
+  _aMx.set(0, 0, 0);
+  for (let i = 0; i < n; i++) {
+    const cp = COL_POINTS[i];
+    _aR.copy(cp.p).applyQuaternion(H.quat);
+    _aP.copy(_aR).add(H.pos);
+    _aV.copy(H.vel).add(_aT.crossVectors(omegaW, _aR));
+    WX.field(_aAir, _aP.x, _aP.y, _aP.z, t);
+    _aVR.copy(_aV).sub(_aAir).applyQuaternion(qInv);
+    _aF.set(
+      -DRAG.x * _aVR.x * Math.abs(_aVR.x),
+      -DRAG.y * _aVR.y * Math.abs(_aVR.y),
+      -DRAG.z * _aVR.z * Math.abs(_aVR.z)
+    ).multiplyScalar(k).applyQuaternion(H.quat);
+    _aFx.add(_aF);
+    _aT2.crossVectors(_aT3.copy(_aR).sub(_aCenW), _aF);
+    _aMx.add(_aT2);
+  }
+  H.vel.addScaledVector(_aFx, INV_MASS * dt);
+  _aMx.applyQuaternion(qInv);
+  H.avel.addScaledVector(_aMx, INV_INERTIA * dt);
+}
+
+/* =====================================================================
+   21. 飞行物理（玩家与 NPC 共用）
    ===================================================================== */
 const ATT_KP = 12.0;
 const ATT_KD = 2 * Math.sqrt(ATT_KP) * 1.05;
 
 function physics(dt, t) {
-/* ★ 强制解锁：损伤没到就绝不允许锁死（只对玩家） */
 if (!toastMute && assistLocked && hullDamage < ASSIST_DMG_THRESHOLD && rotorDamage < CONTROL_LOSS_THRESHOLD) {
   assistLocked = false;
 }
   rotorAngle += rotorSpool * AC.def.rotorOmega * dt;
   tailAngle += rotorSpool * AC.def.tailOmega * dt;
 
-/* ★ 入水检测：按主旋翼头判定 */
 {
   const rotorWorld = AC.def.rotorPos.clone().applyQuaternion(H.quat).add(H.pos);
   const inWater = rotorWorld.y < WATER_Y;
   if (inWater && !H.crashed) {
-    /* 入水：减速 + 慢慢下沉 */
     H.vel.x *= Math.exp(-2.2 * dt);
     H.vel.z *= Math.exp(-2.2 * dt);
     if (H.vel.y < -1.5) H.vel.y = lerp(H.vel.y, -1.5, 1 - Math.exp(-3.0 * dt));
     H.avel.multiplyScalar(Math.exp(-2.0 * dt));
-    /* 主旋翼头完全没入 → 沉没判定坠毁 */
     if (rotorWorld.y < WATER_Y - 0.5) {
       registerCrash('坠入水中 · 沉没', 6);
     }
   } else if (H.pos.y < WATER_Y + 1 && !H.crashed) {
-    /* 机身在水面附近：也减速，别冲太快 */
     H.vel.x *= Math.exp(-1.0 * dt);
     H.vel.z *= Math.exp(-1.0 * dt);
   }
@@ -4140,14 +4019,10 @@ if (!toastMute && assistLocked && hullDamage < ASSIST_DMG_THRESHOLD && rotorDama
   H.rho = settings.airDensity ? clamp(Math.exp(-alt / 8500), 0.22, 1) : 1;
 
   let targetColl;
-/* 失控时，辅助效果减到 15% */
 const assistStrength = controlLoss ? 0.15 : 1.0;
 if (assist) {
   const gb = smoothstep(0.4, 8, agl);
   const base = HOVER_COLL * lerp(0.84, 1.0, gb);
-  /* 机体倾斜后，升力沿竖直方向的分量按 cosθ 衰减。这里按 1/cosθ 自动补回总距，
-     否则"一前倾就持续掉高度"，AI 不知道这点就会直接拍地。
-     upY == 旋转后的机头上轴的 y 分量 == cos(倾角)，无分配开销。 */
   const q = H.quat;
   const upY = clamp(1 - 2 * (q.x * q.x + q.z * q.z), 0.18, 1);
   const comp = clamp(1 / upY, 1, 2.2);
@@ -4220,24 +4095,17 @@ const targetYawRate = ctrlYaw * 0.9 * tailFactor;
   if (H.vortex) thrustMul *= 0.70;
   const force = upAxis.clone().multiplyScalar(H.coll * MAX_THRUST * thrustMul);
   force.addScaledVector(rightAxis, -H.coll * 2400 * engineFactor * tailFactor * (assist ? 0.15 : 1.0));
-  const vLocal = H.vel.clone().applyQuaternion(H.quat.clone().invert());
-  const dragLocal = new THREE.Vector3(
-    -DRAG.x * vLocal.x * Math.abs(vLocal.x),
-    -DRAG.y * vLocal.y * Math.abs(vLocal.y),
-    -DRAG.z * vLocal.z * Math.abs(vLocal.z)
-  ).multiplyScalar(H.rho);
-  force.add(dragLocal.applyQuaternion(H.quat));
   force.y -= MASS * GRAV * (1 - smoothstep(60000, 140000, alt) * 0.88);
-  const windScale = clamp(1 - alt / 2500, 0, 1) * H.rho;
-  if (windScale > 0.01) {
-    force.x += ((Math.sin(t * 0.21) * 2.0 + 1.4) * windScale - H.vel.x) * 55;
-    force.z += ((Math.cos(t * 0.17) * 1.8 - 0.7) * windScale - H.vel.z) * 55;
-  }
   if (H.vortex) {
     H.avel.x += (Math.random() - 0.5) * 9 * dt;
     H.avel.z += (Math.random() - 0.5) * 9 * dt;
   }
   H.vel.addScaledVector(force, dt / MASS);
+
+  /* ★ 空气动力：所有气动力都来自「机体相对气流」，
+       风是以空气速度的形式进入物理，而不是外加一个程序化的推力。 */
+  applyAerodynamics(dt, t);
+
   H.pos.addScaledVector(H.vel, dt);
   groundContacts = solveGroundContacts(dt);
   H.onGround = groundContacts > 0;
@@ -4249,7 +4117,6 @@ const targetYawRate = ctrlYaw * 0.9 * tailFactor;
   }
 if (mBlades === 0 && !H.crashed) registerCrash('主旋翼完全失效', 8);
 
-/* ── 电传辅助损坏 / 失控 状态检查 ── */
 if (!assistDamaged && hullDamage >= ASSIST_DMG_THRESHOLD && !H.crashed) {
   assistDamaged = true;
   assist = false;
@@ -4268,12 +4135,10 @@ if (!controlLoss && rotorDamage >= CONTROL_LOSS_THRESHOLD && !H.crashed) {
     toast('⚠ 旋翼受损 · 操控失控', 2.8, true);
   }
 }
-//损坏状态下，辅助被打开后会随机时长再次失效 */
 if (assistDamaged && assist && !H.crashed) {
   assistDamagedTimer -= dt;
   if (assistDamagedTimer <= 0) {
     assist = false;
-    /* 每次强制关时再加重损伤（模拟"越挣扎越坏"） */
     hullDamage += 0.05;
     toast('⚠ 电传辅助再次失效', 1.8, true);
   }
@@ -4294,7 +4159,6 @@ function registerCrash(reason, severity) {
     if (btnReset) btnReset.classList.add('alert');
     if (pauseBtn) pauseBtn.classList.add('alert');
   }
-/* ★ 坠毁瞬间火球 */
 FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.0 + clamp((severity || 8) / 20, 0, 1) * 1.2);
   const sev = clamp(severity || 8, 4, 30);
   H.vel.x += (Math.random() - 0.5) * sev * 0.22;
@@ -4307,7 +4171,7 @@ FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.0 + clamp((severity || 8) / 20, 0,
 }
 
 /* =====================================================================
-   21. 输入
+   22. 输入
    ===================================================================== */
 const stickEls = { L: document.getElementById('stickL'), R: document.getElementById('stickR') };
 const knobEls  = { L: stickEls.L.querySelector('.knob'), R: stickEls.R.querySelector('.knob') };
@@ -4414,22 +4278,17 @@ function endPointer(e) {
     if (viewPointers.size === 0) viewDragging = false;
   }
 }
-/* ★ 键盘监听：WASD → 左摇杆，方向键 → 右摇杆 */
 window.addEventListener('keydown', (e) => {
-  /* 输入框里打字时不拦截 */
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
   const k = e.key.toLowerCase();
-  /* WASD + 方向键 */
   if (['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) {
     keys[k] = true;
     e.preventDefault();
   }
-  /* 空格：引擎开关 */
   if (k === ' ' || k === 'spacebar') {
     keys[' '] = true;
     e.preventDefault();
   }
-  /* F：机炮；R：火箭；Esc：菜单 */
   if (k === 'f') { keys['f'] = true; e.preventDefault(); }
   if (k === 'r') { keys['r'] = true; e.preventDefault(); }
 if (k === 'enter') { keys['enter'] = true; e.preventDefault(); }
@@ -4442,7 +4301,6 @@ window.addEventListener('keyup', (e) => {
   if (k === 'r') keys['r'] = false;
 if (k === 'enter') keys['enter'] = false;
 });
-/* ★ 鼠标滚轮缩放视角 */
 window.addEventListener('wheel', (e) => {
   if (inMenu || hangarOpen || paused) return;
   if (e.target && e.target.closest && e.target.closest('#hangar, #settings, #pause, #mp, #start, .setbox, .mpbox, .paubox')) return;
@@ -4453,7 +4311,7 @@ window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
 
 /* =====================================================================
-   22. 相机
+   23. 相机
    ===================================================================== */
 function updateCamera(dt) {
   const now = performance.now();
@@ -4491,9 +4349,8 @@ function updateCamera(dt) {
 }
 
 /* =====================================================================
-   23. 操纵杆联动（玩家与 NPC 通用：AI 推杆时座舱摇杆会跟着动）
+   24. 操纵杆联动（玩家与 NPC 通用）
    ===================================================================== */
-/* ★ 键盘 → 摇杆期望值（慢慢推 / 松手慢慢回中） */
 function stepTowards(cur, target, speed, ret) {
   if (target > cur) return Math.min(target, cur + speed);
   if (target < cur) return Math.max(target, cur - speed);
@@ -4532,7 +4389,6 @@ function updateKeyboardInput(dt) {
     if (isFinite(kbInput.ry)) input.ry = kbInput.ry;
   }
 
-  /* 单次触发键 */
   if (keys[' '] && !kbInput._sp) { kbInput._sp = 1; if (btnEngine) btnEngine.click(); }
   if (!keys[' ']) kbInput._sp = 0;
   if (keys['f'] && !kbInput._f) { kbInput._f = 1; if (btnFire) btnFire.click(); }
@@ -4544,7 +4400,6 @@ if (!keys['enter']) kbInput._enter = 0;
 }
 function updateCockpitControls() {
   if (!AC) return;
-  /* 失控时，摇杆响应变弱（视觉上仍动，但幅度小） */
   const ctrlScale = controlLoss ? 0.35 : 1.0;
   for (const g of [AC.cyclicL, AC.cyclicR]) {
     g.rotation.x = input.ry * 0.30 * ctrlScale;
@@ -4563,7 +4418,7 @@ function updateCockpitControls() {
 }
 
 /* =====================================================================
-   24. 音频（恢复"砰砰砰"桨叶拍击 + 停转彻底静音）
+   25. 音频
    ===================================================================== */
 let audio = null;
 function initAudio() {
@@ -4612,7 +4467,6 @@ function updateAudio() {
   audio.lp.frequency.setTargetAtTime(900 + rotorSpool * 2200, now, 0.3);
 }
 
-/* ===================== NPC 旋翼声 ===================== */
 const npcVoices = [];
 let npcAudioReady = false;
 
@@ -4650,7 +4504,7 @@ function updateNPCAudio() {
   const ctx = audio.ctx, now = ctx.currentTime;
   camera.updateMatrixWorld();
   const e = camera.matrixWorld.elements;
-  const rx = e[0], rz = e[2];                  // 相机右向量（水平分量），用来摆左右声道
+  const rx = e[0], rz = e[2];
   for (let i = 0; i < npcVoices.length; i++) {
     const v = npcVoices[i], c = NPCs[i];
     if (!c || c.S.shattered || c.S.rotorSpool < 0.02) {
@@ -4689,7 +4543,6 @@ function silenceAudio() {
     }
   } catch (e) {}
 }
-/* ===================== 背景音乐 ===================== */
 let bgm = null, bgmStarted = false;
 let bgmFadeTimer = null;
 let audioUnlocked = false;
@@ -4702,7 +4555,6 @@ function createBGMIfNeed() {
     }
 }
 
-/** BGM淡入，targetVol目标音量，durationSec淡入秒数 */
 function fadeInBGM(targetVol = 0.45, durationSec = 1.8) {
     if (!audioUnlocked) return;
     createBGMIfNeed();
@@ -4724,7 +4576,6 @@ function fadeInBGM(targetVol = 0.45, durationSec = 1.8) {
 }
 
 
-/** BGM淡出停止，durationSec淡出秒数 */
 function fadeOutBGM(durationSec = 1) {
     if (!bgm || !bgmStarted) return;
     clearInterval(bgmFadeTimer);
@@ -4745,21 +4596,19 @@ function fadeOutBGM(durationSec = 1) {
     }, step);
 }
 
-// 用户第一次点击屏幕：解锁音频，解锁成功立刻淡入主菜单BGM
 async function unlockAudio() {
     if(audioUnlocked) return;
     audioUnlocked = true;
-    // 同时解锁Web Audio上下文（旋翼音效）
     if(audio && audio.ctx.state === 'suspended'){
         await audio.ctx.resume();
     }
-    fadeInBGM(0.45,3.2); // 主菜单淡入BGM，拉长淡入时间，避免突然爆音
+    fadeInBGM(0.45,3.2);
 }
 window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('click', unlockAudio);
 
 /* =====================================================================
-   25. HUD
+   26. HUD
    ===================================================================== */
 const el = {
   type: document.getElementById('h-type'),
@@ -4823,7 +4672,7 @@ function updateHUD(dt) {
 }
 
 /* =====================================================================
-   26. 昼夜
+   27. 昼夜
    ===================================================================== */
 const sunDirVec = new THREE.Vector3();
 function updateDayNight(dt) {
@@ -4863,7 +4712,7 @@ function updateDayNight(dt) {
 }
 
 /* =====================================================================
-   27. 设置
+   28. 设置
    ===================================================================== */
 function applyQualityToMats(mats) {
   if (!mats) return;
@@ -4876,14 +4725,13 @@ function applyQualityToMats(mats) {
   mats.glass.specular.setHex(settings.quality === 'high' ? 0xffffff : 0x555555);
 }
 function applySettings() {
-    /* 时间选择：把 dayTime 固定到对应时段 */
 if (settings.timeOfDay !== 'auto') {
   const T = {
-    dawn:    0.22,   /* 凌晨 */
-    morning: 0.32,   /* 清晨 */
-    noon:    0.50,   /* 中午 */
-    evening: 0.72,   /* 黄昏 */
-    night:   0.95    /* 夜晚 */
+    dawn:    0.22,
+    morning: 0.32,
+    noon:    0.50,
+    evening: 0.72,
+    night:   0.95
   };
   if (T[settings.timeOfDay] !== undefined) dayTime = T[settings.timeOfDay];
 }
@@ -4919,27 +4767,23 @@ if (settings.timeOfDay !== 'auto') {
   for (const cl of cloudLayers) cl.mesh.visible = settings.clouds;
   camera.far = v.camFar;
   camera.updateProjectionMatrix();
-  /* 地形风格：重新着色 */
 for (let k = 0; k < LOD_LV; k++) lodBuild(LOD[k]);
-/* 树也重新着色 */
 recolorTrees();
   skyUniforms.uAtmo.value = settings.atmosphere ? 1 : 0.35;
   if (!settings.atmosphere) starMat.opacity = 0;
 
-/* ★ 画质联动粒子预算 */
 FX.setBudget(q.fxSmoke, q.fxFire);
 
 
-/* 座舱航图：切换地形风格时，触发对应底图加载 */
 loadMapImage(settings.terrainStyle || 'hill');
 
-/* 探照灯状态 */
 if (AC && AC.searchLight) AC.searchLight.visible = !!settings.searchLight;
 refreshSearchLightBtn();
+if (window.__wxApply) window.__wxApply();
 }
 
 /* =====================================================================
-   28. 机库预览场景
+   29. 机库预览场景
    ===================================================================== */
 const pv = {
   renderer: null, scene: null, camera: null, sun: null, model: null, typeId: null,
@@ -5096,7 +4940,7 @@ function updatePreview(dt) {
 }
 
 /* =====================================================================
-   29. 机型切换 & 机库 UI
+   30. 机型切换 & 机库 UI
    ===================================================================== */
 function updateHUDType() {
   if (el.type) el.type.textContent = AIRCRAFT[aircraftId].name;
@@ -5152,7 +4996,6 @@ function openHangar() {
   if (hangarOpen) return;
   hangarOpen = true;
   silenceAudio();
-  // 只有【不在主菜单】也就是游戏中打开机库 → 播放BGM；主菜单打开机库不改动BGM
   if (!inMenu) {
     fadeInBGM(0.45,1.5);
   }
@@ -5166,7 +5009,6 @@ function openHangar() {
 function closeHangar() {
   hangarOpen = false;
   document.getElementById('hangar').classList.remove('show');
-  // 游戏内关闭机库，回到飞行画面，停止BGM；主菜单关闭机库不动BGM
   if (!inMenu) {
     fadeOutBGM(0.5);
   }
@@ -5174,9 +5016,7 @@ function closeHangar() {
 }
 
 /* =====================================================================
-   30. ====== NPC 系统 ======
-   NPC 与玩家机型完全一致，走同一套 physics()，
-   区别只是「那两个摇杆由 AI 来推」——AI 写 c.ctrl，物理把它们当成 input。
+   31. NPC 系统
    ===================================================================== */
 const MODE_NAME = { hover: '悬停', orbit: '盘旋', free: '自由', chase: '追击' };
 const MODE_COLOR = { hover: '#7fe9ff', orbit: '#9effcf', free: '#ffd98a', chase: '#ff8a8a' };
@@ -5184,18 +5024,16 @@ const allCrafts = [];
 const NPCs = [];
 const MAX_NPC = 6;
 
-/* ★ 追击 / 逃跑 参数 */
-const HUNT_RANGE = 700;      /* 追击模式搜索「非追击 NPC」猎物的半径 (m) */
-const PROVOKE_DIST = 20;     /* 玩家靠近到此距离内 = 挑衅 / 骚扰 (m) */
-const PROVOKE_TIME = 10;     /* 追击 NPC 被挑衅后锁定玩家的时间 (s) */
-const HARASS_LIMIT = 3;      /* 自由模式 NPC：被玩家「反复靠近」累计到此值就逃跑 */
-const FLEE_SPEED = 36;       /* 逃跑水平速度 (m/s)；低于追击模式的 45，追得上 */
+const HUNT_RANGE = 700;
+const PROVOKE_DIST = 20;
+const PROVOKE_TIME = 10;
+const HARASS_LIMIT = 3;
+const FLEE_SPEED = 36;
 let npcSeq = 0;
 let player = null;
 let paused = false;
 let placingMode = null;
 
-/* ---- “换脑”：把全局变量临时指向某个 NPC 的状态 ---- */
 function makeCraftParams(def) {
   return {
     mass: def.mass, maxThrust: def.maxThrust, skidH: def.skidH, drag: def.drag,
@@ -5225,7 +5063,7 @@ function enterCraft(c) {
   const S = c.S, P = c.params;
   rotorSpool = S.rotorSpool; rotorAngle = S.rotorAngle; tailAngle = S.tailAngle;
   engineOn = S.engineOn; assist = c.ctrl.assist;
-if (c.isNPC) engineOn = true;    /* NPC 永远开着引擎，防止被全局状态污染 */
+if (c.isNPC) engineOn = true;
   hullDamage = S.hullDamage; rotorDamage = S.rotorDamage; shattered = S.shattered;
   milestoneIdx = MILESTONES.length;
 assistDamaged = c.assistDamaged || false;
@@ -5240,7 +5078,7 @@ MASS = P.mass;
 function exitCraft(c, s) {
   const S = c.S;
   S.rotorSpool = rotorSpool; S.rotorAngle = rotorAngle; S.tailAngle = tailAngle;
-  if (!c.isNPC) S.engineOn = engineOn;   /* 只有玩家才用全局 engineOn */
+  if (!c.isNPC) S.engineOn = engineOn;
 c.ctrl.assist = assist;
   c.assistDamaged = assistDamaged;
   c.assistDamagedTimer = assistDamagedTimer;
@@ -5271,13 +5109,11 @@ function initPlayerCraft() {
   if (allCrafts.length === 0) allCrafts.push(player);
 }
 
-/* ---- 通用访问器（玩家量存在全局里，NPC 量存在自己身上） ---- */
 function spoolOf(c) { return c.isPlayer ? rotorSpool : c.S.rotorSpool; }
 function isShatteredOf(c) { return c.isPlayer ? shattered : c.S.shattered; }
 
-/* ---- AI ---- */
 const _aiV = new THREE.Vector3(), _aiQ = new THREE.Quaternion();
-const AI_ACC_PER_RX = GRAV * 0.42;   // 摇杆 1.0 ≈ 4.12 m/s² 横向加速度
+const AI_ACC_PER_RX = GRAV * 0.42;
 function wrapPi(a) {
   a %= Math.PI * 2;
   if (a > Math.PI) a -= Math.PI * 2;
@@ -5288,12 +5124,9 @@ function aiControl(c, dt, t) {
   const S = c.S, ctrl = c.ctrl, A = c.ai;
 if (!A) return;
 
-/* ★ 情绪更新：多人联机时被反复拉扯会生气 */
 npcUpdateAnger(c, dt);
-/* 非追击模式绝不能残留瞄准航向（否则机头会被"拉"向玩家） */
 if (A.mode !== 'chase') A.aimHeading = null;
-  if (!S.engineOn) S.engineOn = true;     // NPC 引擎默认开启
-/* 电传辅助：损坏 / 失控时不自动开，跟玩家一样 */
+  if (!S.engineOn) S.engineOn = true;
 if (!c.assistDamaged && !c.controlLoss) {
   ctrl.assist = true;
 } else {
@@ -5307,14 +5140,12 @@ if (!c.assistDamaged && !c.controlLoss) {
   let vx = 0, vz = 0, targetY = A.home.y, wantHeading = null;
 
   if (A.mode === 'hover') {
-    /* 一直悬停在放置点，不看仪表（带一点自然起伏） */
     const dx = A.home.x - S.pos.x, dz = A.home.z - S.pos.z;
     const d = Math.hypot(dx, dz);
     const w = Math.min(7, d * 0.50);
     if (d > 0.5) { vx = dx / d * w; vz = dz / d * w; }
     targetY = A.home.y + Math.sin(t * 0.55 + A.seed) * 1.0;
     wantHeading = A.homeHeading;
-    /* ★ 20 米强制避让 */
     for (const o of allCrafts) {
       if (o === c || isShatteredOf(o)) continue;
       if (!o.isNPC) continue;
@@ -5332,7 +5163,6 @@ if (!c.assistDamaged && !c.controlLoss) {
     }
 
   } else if (A.mode === 'orbit') {
-    /* 围绕放置点盘旋，不看仪表 */
     A.ang += dt * A.ospd / A.rad;
     const tx = A.home.x + Math.cos(A.ang) * A.rad;
     const tz = A.home.z + Math.sin(A.ang) * A.rad;
@@ -5340,7 +5170,6 @@ if (!c.assistDamaged && !c.controlLoss) {
     const w = Math.min(13, d * 0.80);
     if (d > 0.3) { vx = dx / d * w; vz = dz / d * w; }
     targetY = A.home.y + Math.sin(t * 0.40 + A.seed) * 1.5;
-    /* ★ 20 米强制避让 */
     for (const o of allCrafts) {
       if (o === c || isShatteredOf(o)) continue;
       if (!o.isNPC) continue;
@@ -5358,7 +5187,6 @@ if (!c.assistDamaged && !c.controlLoss) {
     }
 
   } else if (A.mode === 'free') {
-    /* 到处飞，看仪表，主动避开地形 / 树木 / 其它飞机 */
     A.timer -= dt;
     const dx = A.tx - S.pos.x, dz = A.tz - S.pos.z, d = Math.hypot(dx, dz);
     if (A.timer <= 0 || d < 25) {
@@ -5372,7 +5200,6 @@ if (!c.assistDamaged && !c.controlLoss) {
     const w = Math.min(26, d * 0.70);
     if (d > 1) { vx = dx / d * w; vz = dz / d * w; }
     targetY = A.ty;
-    /* ★ 逃跑：被追击模式 NPC 盯上 / 被玩家反复骚扰 → 覆盖巡航速度，背对威胁高速脱离 */
     if (npcUpdateFlee(c, dt)) {
       const fo = npcFleeSteer(c, t);
       vx = fo.vx; vz = fo.vz;
@@ -5403,36 +5230,27 @@ if (!c.assistDamaged && !c.controlLoss) {
     targetY = Math.min(targetY, gy + 320);
 
 } else if (A.mode === 'chase') {
-  /* 追击玩家：保持机炮射程，机头对准，不撞击 */
-  /* ★ 追击目标由 npcUpdateHunt 统一选出：
-     联机怒气目标 > 挑衅的玩家(20m内) > 最近的（玩家 / 700m 内非追击 NPC） */
   const pc = c.huntTarget;
   const ok = pc && !isShatteredOf(pc) && !pc.S.crashed && pc.model.group.visible;
   if (ok) {
     const dx = pc.S.pos.x - S.pos.x;
     const dz = pc.S.pos.z - S.pos.z;
     const dh = Math.hypot(dx, dz);
-/* NPC 主动逼近到 80m 内，才能保证命中 */
 const WANT_D = 80, HYST = 25;
 let radial = 0;
-if (dh > WANT_D + HYST)      radial = 45;   /* 远了拼命追 */
-else if (dh < WANT_D - HYST) radial = -12;  /* 只有太近才慢慢退 */
+if (dh > WANT_D + HYST)      radial = 45;
+else if (dh < WANT_D - HYST) radial = -12;
 else                          radial = 0;
-    /* ★ 没炮的机型（除 407M 外）：不保持距离，全速直接撞向目标 */
     const ram = !(c.def && c.def.id === 'y407M');
     if (ram) radial = 45;
     if (dh > 0.5) { vx = dx / dh * radial; vz = dz / dh * radial; }
-    /* 猎物是 NPC：叠加猎物自身速度（前馈），逃跑中的猎物才能被咬住；限速 60m/s */
     if (pc.isNPC || ram) {
       vx += pc.S.vel.x * 0.85; vz += pc.S.vel.z * 0.85;
       const spd = Math.hypot(vx, vz);
       if (spd > 60) { vx *= 60 / spd; vz *= 60 / spd; }
     }
-    /* 机头对准玩家（不管有没有炮） */
     A.aimHeading = Math.atan2(-dx, -dz);
-    /* 高度：保持跟玩家差不多高（略高一点，方便机炮下压） */
-    targetY = pc.S.pos.y + (ram ? 0 : 6);   /* 撞击型与目标同高 */
-    /* ★ 20 米强制避让其它 NPC（撞击型不避让自己的目标） */
+    targetY = pc.S.pos.y + (ram ? 0 : 6);
     for (const o of allCrafts) {
       if (o === c || isShatteredOf(o)) continue;
       if (!o.isNPC) continue;
@@ -5458,7 +5276,7 @@ else                          radial = 0;
       if (dd < 26 && dd > 0.01) { const k = (26 - dd) * 0.35; vx += ddx / dd * k; vz += ddz / dd * k; }
     }
   } else {
-      A.aimHeading = null;   /* 没目标：不要保留上一次的瞄准航向 */
+      A.aimHeading = null;
       const dx = A.home.x - S.pos.x, dz = A.home.z - S.pos.z, d = Math.hypot(dx, dz);
       const w = Math.min(8, d * 0.5);
       if (d > 0.5) { vx = dx / d * w; vz = dz / d * w; }
@@ -5466,31 +5284,25 @@ else                          radial = 0;
     }
   }
 
-  /* 通用安全网：离地太近就抬高；前方地形过高就爬升；掉得太快就强拉一把 */
 if (targetY < gy + 16) targetY = gy + 16;
 const fh = terrainHeight(S.pos.x + fwdX * 30, S.pos.z + fwdZ * 30);
 if (fh > S.pos.y - 10) targetY = Math.max(targetY, fh + 34);
 if (S.pos.y < gy + 26 && S.vel.y < -2.0) targetY = Math.max(targetY, gy + 48);
 
-  /* 横向：期望加速度 → 摇杆 */
   const aL = _aiV.set((vx - S.vel.x) * 1.2, 0, (vz - S.vel.z) * 1.2)
     .applyQuaternion(_aiQ.copy(S.quat).invert());
   ctrl.rx = clamp(aL.x / AI_ACC_PER_RX, -1.9, 1.9);
   ctrl.ry = clamp(aL.z / AI_ACC_PER_RX, -1.9, 1.9);
 
-  /* ★ 防拍地：先算安全下降速度 */
 npcSafeSinkCheck(c, dt, t);
-/* 危险时直接按住下降速度（下降率限制），越重越早触发 */
 if (c.safeSink !== null && S.vel.y < c.safeSink) {
   S.vel.y = c.safeSink;
 }
 
-/* 纵向：高度 PD + 少量积分 */
 A.iAlt = clamp(A.iAlt + (targetY - S.pos.y) * dt, -25, 25);
   const aY = clamp((targetY - S.pos.y) * 0.45 - S.vel.y * 1.20 + A.iAlt * 0.22, -8, 8);
   ctrl.ly = clamp(-aY / (GRAV * 0.55), -1, 1);
 
-/* 航向：脚舵 —— 如果机炮系统给了一个"瞄准航向"，优先用它 */
 if (A.aimHeading !== undefined && A.aimHeading !== null) {
   wantHeading = A.aimHeading;
 } else if (wantHeading === null) {
@@ -5500,48 +5312,36 @@ if (A.aimHeading !== undefined && A.aimHeading !== null) {
 A.heading = wantHeading;
 ctrl.lx = clamp(-wrapPi(wantHeading - yawNow) * 1.8, -1, 1);
 }
-/* ===================== NPC 防拍地（只看下降） ===================== */
 function npcSafeSinkCheck(c, dt, t) {
   if (c.isRemoteNPC) return;
   const S = c.S;
   if (S.crashed || S.shattered) { c.safeSink = null; return; }
 
-  /* 离地高于 100 米：不算，直接清掉 */
   const gy = terrainHeight(S.pos.x, S.pos.z);
   const agl = S.pos.y - gy;
   if (agl > 200) { c.safeSink = null; c.nextSafeCheck = 0; return; }
 
-  /* 没到点就不算 */
   if (t < c.nextSafeCheck) return;
 
-  /* 重机型算勤点（0.3s），轻机型 0.5s */
   const heavy = c.def.mass >= 3000;
   c.nextSafeCheck = t + (heavy ? 0.3 : 0.5);
 
-  /* 反应时间：重 7s，轻 5s */
   const reactT = heavy ? 7 : 5;
 
-  /* 照当前下降速度，还有几秒拍地 */
   const vs = S.vel.y;
-  if (vs >= -0.1) { c.safeSink = null; return; }   /* 没在下降，安全 */
+  if (vs >= -0.1) { c.safeSink = null; return; }
 
-  const tToGround = agl / (-vs);                    /* 秒 */
+  const tToGround = agl / (-vs);
 
-  if (tToGround >= reactT) { c.safeSink = null; return; }  /* 来得及，安全 */
+  if (tToGround >= reactT) { c.safeSink = null; return; }
 
-  /* 危险：算一个安全下降速度
-     让它在 reactT 秒内刚好落地，且留 20% 余量 */
   c.safeSink = -(agl / reactT) * 0.8;
 }
-/* ===================== NPC 猎杀 / 逃跑 ===================== */
 function craftAlive(o) { return !!o && !isShatteredOf(o) && !o.S.crashed; }
 function playerTargetable(o) {
-  /* 玩家一侧：本地玩家 + 联机对手（非 NPC），必须活着且模型可见 */
   return !o.isNPC && craftAlive(o) && !!o.model && o.model.group.visible;
 }
 function isPeacefulNPC(o) {
-  /* 猎物：本地权威的、非追击模式的 NPC。
-     联机镜像 NPC 的状态完全由对方广播驱动，本地打了不算，所以不当猎物 */
   return !!o && o.isNPC && !o.isRemoteNPC && !!o.ai && o.ai.mode !== 'chase';
 }
 function npcUpdateHunt(c, dt) {
@@ -5551,7 +5351,6 @@ function npcUpdateHunt(c, dt) {
     return;
   }
 
-  /* ① 挑衅检测：玩家（本地 / 联机对手）进入 20m → 锁定该玩家 10 秒 */
   let prov = null, provD = PROVOKE_DIST;
   for (const o of allCrafts) {
     if (o === c || !playerTargetable(o)) continue;
@@ -5565,15 +5364,12 @@ function npcUpdateHunt(c, dt) {
     if (c.provokeTimer <= 0) c.provokeTarget = null;
   }
 
-  /* ② 选目标：联机怒气目标 > 挑衅玩家 > 最近的（玩家 / 700m 内非追击 NPC） */
   let tgt = null;
   if (c.angerTarget && craftAlive(c.angerTarget)) {
     tgt = c.angerTarget;
   } else if (c.provokeTimer > 0 && c.provokeTarget && craftAlive(c.provokeTarget)) {
     tgt = c.provokeTarget;
   } else {
-    /* 候选 = 玩家（任意距离）+ 700m 内的非追击 NPC，直接取「最近的」。
-       只做 30% 的滞回，避免两个目标距离相近时来回切；玩家贴脸时一定会被优先锁定 */
     let best = null, bd = 1e9;
     for (const o of allCrafts) {
       if (o === c) continue;
@@ -5595,18 +5391,15 @@ function npcUpdateHunt(c, dt) {
   c.huntTarget = tgt;
 }
 
-/* 自由模式 NPC：是否该逃跑（被追击 / 被玩家反复骚扰）。返回 true = 正在逃跑 */
 function npcUpdateFlee(c, dt) {
   const wasFleeing = c.fleeTimer > 0;
 
-  /* ① 被追击：有追击模式的 NPC 把我当猎物 */
   let hunted = false;
   for (const h of NPCs) {
     if (h === c || h.isRemoteNPC || !h.ai || h.ai.mode !== 'chase') continue;
     if (h.huntTarget === c && craftAlive(h)) { hunted = true; break; }
   }
 
-  /* ② 被玩家反复骚扰：每「靠近 20m 内」一次记 1 点，赖着不走每秒 +0.3，离开后慢慢消气 */
   let near = null;
   for (const o of allCrafts) {
     if (o === c || !playerTargetable(o)) continue;
@@ -5622,11 +5415,10 @@ function npcUpdateFlee(c, dt) {
   }
   if (c.harass >= HARASS_LIMIT) {
     c.harass = 0;
-    c.fleeTimer = 12 + Math.random() * 6;     /* 逃一阵：12~18 秒 */
+    c.fleeTimer = 12 + Math.random() * 6;
     c.fleeFromPlayer = near;
   }
 
-  /* ③ 计时：被追击期间一直跑，摆脱后再多跑 5 秒 */
   if (hunted) c.fleeTimer = Math.max(c.fleeTimer, 5);
   else if (c.fleeTimer > 0) c.fleeTimer = Math.max(0, c.fleeTimer - dt);
 
@@ -5640,26 +5432,23 @@ const _fleeOut = { vx: 0, vz: 0 };
 function npcFleeSteer(c, t) {
   const S = c.S, A = c.ai;
   let ax = 0, az = 0;
-  /* 背对所有正在盯着我的追击者 */
   for (const h of NPCs) {
     if (h === c || h.isRemoteNPC || !h.ai || h.ai.mode !== 'chase') continue;
     if (h.huntTarget !== c || !craftAlive(h)) continue;
     const dx = S.pos.x - h.S.pos.x, dz = S.pos.z - h.S.pos.z, d = Math.hypot(dx, dz) || 1;
     ax += dx / d; az += dz / d;
   }
-  /* 背对骚扰我的玩家 */
   const p = c.fleeFromPlayer;
   if (p && craftAlive(p)) {
     const dx = S.pos.x - p.S.pos.x, dz = S.pos.z - p.S.pos.z, d = Math.hypot(dx, dz) || 1;
     ax += dx / d; az += dz / d;
   }
   let al = Math.hypot(ax, az);
-  if (al < 0.05) {                    /* 威胁都没了（只剩计时尾巴）：顺着当前速度继续跑 */
+  if (al < 0.05) {
     ax = S.vel.x; az = S.vel.z; al = Math.hypot(ax, az);
     if (al < 1) { const yw = bodyYaw(S.quat); ax = -Math.sin(yw); az = -Math.cos(yw); al = 1; }
   }
   ax /= al; az /= al;
-  /* 快到岛外海域时，逐渐拐向地图中心，别一路逃出 4km 的世界 */
   const rr = Math.max(Math.abs(S.pos.x), Math.abs(S.pos.z));
   if (rr > 3400) {
     const k = Math.min(1, (rr - 3400) / 500);
@@ -5668,14 +5457,12 @@ function npcFleeSteer(c, t) {
     az = az * (1 - k) + (-S.pos.z / cl) * k;
     const nl = Math.hypot(ax, az) || 1; ax /= nl; az /= nl;
   }
-  /* 侧向蛇形机动，别当固定靶 */
   const wv = Math.sin(t * 0.9 + A.seed * 3) * 9;
   _fleeOut.vx = ax * FLEE_SPEED - az * wv;
   _fleeOut.vz = az * FLEE_SPEED + ax * wv;
   return _fleeOut;
 }
 
-/* ===================== NPC 情绪系统 ===================== */
 function S_dist(a, b) {
   const dx = a.S.pos.x - b.S.pos.x;
   const dy = a.S.pos.y - b.S.pos.y;
@@ -5752,23 +5539,18 @@ function npcUpdateAnger(c, dt) {
     c.anger = Math.max(0, c.anger - dt * 0.08);
   }
 }
-/* ===================== NPC 机炮 ===================== */
 function npcGunControl(c, dt) {
-  /* 只有 407M 有炮；并且只有「追击模式」才会开火。
-     悬停 / 盘旋 / 自由模式的 407M 一律不开火、不瞄准，也不会主动攻击玩家。
-     目标 = npcUpdateHunt 选出的 huntTarget（飞行和开火共用同一个目标） */
   c.gunFiring = false;
   if (!c.def || c.def.id !== 'y407M') { c.gunTarget = null; return; }
   if (c.S.crashed || c.S.shattered) { c.gunTarget = null; c._gunHold = 0; return; }
   if (!c.ai || c.ai.mode !== 'chase') { c.gunTarget = null; c._gunHold = 0; return; }
 
   const best = c.huntTarget;
-  if (!best || !craftAlive(best) || S_dist(c, best) > 600) {   /* 600m 内才开火 */
+  if (!best || !craftAlive(best) || S_dist(c, best) > 600) {
     c.gunTarget = null; c._gunHold = 0; return;
   }
   c.gunTarget = best;
 
-  /* 机头朝向 和 到目标方向 */
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(c.S.quat);
   const to = new THREE.Vector3(
     best.S.pos.x - c.S.pos.x,
@@ -5782,7 +5564,6 @@ function npcGunControl(c, dt) {
   if (dot > aimTol) c._gunHold = 0.6;
   else c._gunHold = Math.max(0, c._gunHold - dt);
   c.gunFiring = (c._gunHold > 0);
-  /* 转向由 aiControl 的追击分支负责（它对准的就是同一个 huntTarget），这里不再写 aimHeading */
 }
 
 function npcFireOneBullet(c) {
@@ -5801,7 +5582,6 @@ function npcFireOneBullet(c) {
     const ay = tgt.S.pos.y + tgt.S.vel.y * tFly - origin.y;
     const az = tgt.S.pos.z + tgt.S.vel.z * tFly - origin.z;
     dir = new THREE.Vector3(ax, ay, az).normalize();
-    /* 机炮散布：越远越散，近距离 <3°，远距离 ~5° */
     const angerK = c.anger > 0.9 ? 0.35 : 1.0;
     const spreadRad = Math.min(0.05, d / 4000 + 0.01) * angerK;
     dir.x += (Math.random() - 0.5) * spreadRad;
@@ -5812,7 +5592,6 @@ function npcFireOneBullet(c) {
     dir = new THREE.Vector3(0, 0, -1).applyQuaternion(c.S.quat).normalize();
   }
 
-  /* 弹道积分 + 命中判定 */
   const GUN_SPEED = 400, GUN_RANGE = 900;
   let px = origin.x, py = origin.y, pz = origin.z;
   let vx = dir.x * GUN_SPEED, vy = dir.y * GUN_SPEED, vz = dir.z * GUN_SPEED;
@@ -5825,7 +5604,7 @@ function npcFireOneBullet(c) {
     for (const o of allCrafts) {
       if (o === c) continue;
       if (isShatteredOf(o)) continue;
-      if (o.isNPC && o.ai && o.ai.mode === 'chase') continue;   /* 追击组是友军：弹道穿过不算命中 */
+      if (o.isNPC && o.ai && o.ai.mode === 'chase') continue;
       for (const cp of o.colPoints) {
         const cw = cp.p.clone().applyQuaternion(o.S.quat).add(o.S.pos);
         const dx = px - cw.x, dy = py - cw.y, dz = pz - cw.z;
@@ -5840,7 +5619,6 @@ function npcFireOneBullet(c) {
     if (py <= gY) { hitPos = new THREE.Vector3(px, gY, pz); break; }
   }
 
-  /* 枪口火焰 */
   for (let k = 0; k < 6; k++) {
     FX.emitFire(
       origin.x + dir.x * 0.15, origin.y + dir.y * 0.15, origin.z + dir.z * 0.15,
@@ -5862,7 +5640,6 @@ function npcFireOneBullet(c) {
   });
 
   if (hitCraft) {
-    /* 打的是本地镜像 -> 走伤害回告；否则本地权威直接掉血 */
     if (hitCraft === MP.remoteCraft) {
       const snap = mpSnapshotRemoteCraft();
       addDmg(hitCraft, 0.008);
@@ -5877,7 +5654,7 @@ function npcFireOneBullet(c) {
 
 function npcStepGun(c, dt) {
   if (!c.gunFiring) { c.gunShotAccum = 0; return; }
-  if (!gunAudio.ready) initGunAudio();   /* NPC 开火也要初始化音频 */
+  if (!gunAudio.ready) initGunAudio();
   c.gunShotAccum += 12.5 * dt;
   let guard = 20;
   while (c.gunShotAccum >= 1 && guard-- > 0) {
@@ -5887,15 +5664,14 @@ function npcStepGun(c, dt) {
   }
 }
 
-/* ---- NPC 步进：换脑 → 同一套 physics() → 座舱摇杆跟着动 ---- */
 function stepNPC(c, dt, t) {
-  npcUpdateHunt(c, dt);          /* ★ 先选好猎杀目标，飞行和机炮共用 */
+  npcUpdateHunt(c, dt);
   npcGunControl(c, dt);
   npcStepGun(c, dt);
   aiControl(c, dt, t);
   const s = enterCraft(c);
   physics(dt, t);
-  updateCockpitControls();     // AI 推杆的可视化
+  updateCockpitControls();
   exitCraft(c, s);
   if (c.rotorCool > 0) c.rotorCool -= dt;
   if (c.S.hullDamage > 2.0 && !c.S.shattered) {
@@ -5911,7 +5687,6 @@ function syncNPCModel(c) {
   if (c.label) { c.label.visible = true; c.label.position.set(c.S.pos.x, c.S.pos.y + 5.2, c.S.pos.z); }
 }
 
-/* ---- NPC 标签 ---- */
 function addNPCLabel(c, mode) {
   const cv = document.createElement('canvas');
   cv.width = 256; cv.height = 64;
@@ -5932,11 +5707,7 @@ function addNPCLabel(c, mode) {
   c.label = sp;
 }
 
-/* ---- 生成 / 移除 ---- */
 function spawnNPC(mode, ground, opts) {
-  /* opts 用于多人同步：
-     { npcId, defId, isRemoteNPC } —— 由 mpHandleNPCAdd 传入，表示这是对方广播来的 NPC；
-     本地正常放置时 opts 为空。 */
   const remote = !!(opts && opts.isRemoteNPC);
   if (!remote && NPCs.length >= MAX_NPC) { toast('NPC 数量已达上限（' + MAX_NPC + '）', 2, true); return null; }
   const npcId = (opts && opts.npcId) || (mpLocalNPCPrefix() + (npcSeq++));
@@ -5953,25 +5724,21 @@ function spawnNPC(mode, ground, opts) {
     S: makeCraftState(),
     ctrl: { lx: 0, ly: 0, rx: 0, ry: 0, assist: true },
     rotorCool: 0, deathTimer: 0, ai: null, label: null,
-    rotorCool: 0, deathTimer: 0, ai: null, label: null,
-/* ★ 情绪系统 */
 anger: 0,
 angerTarget: null,
 angerLock: 0,
 tauntTimer: 0,
 lastDistToTarget: 1e9,
-/* ★ 防拍地 */
 nextSafeCheck: 0,
 safeSink: null,
 gunFiring: false, gunShotCount: 0, gunShotAccum: 0, gunTarget: null,
-/* ★ 猎杀 / 逃跑 */
 huntTarget: null, provokeTimer: 0, provokeTarget: null,
 fleeTimer: 0, fleeFromPlayer: null, harass: 0, _playerNear: false
   };
   const gy = terrainHeight(ground.x, ground.z);
   const alt = gy + (mode === 'orbit' ? 34 : mode === 'hover' ? 24 : 30);
   c.S.pos.set(ground.x, alt, ground.z);
-  c.S.engineOn = true;                // 一开始就是默认开启引擎
+  c.S.engineOn = true;
   c.S.rotorSpool = 0.6;
   c.S.onGround = false;
   c.S.rotorAngle = Math.random() * 6.28;
@@ -5995,7 +5762,6 @@ fleeTimer: 0, fleeFromPlayer: null, harass: 0, _playerNear: false
   return c;
 }
 function removeNPC(c, opts) {
-  /* opts.fromRemote：这次移除是收到对方的 npc-rm 广播触发的，不再往回广播 */
   const fromRemote = !!(opts && opts.fromRemote);
   const i = allCrafts.indexOf(c); if (i >= 0) allCrafts.splice(i, 1);
   const j = NPCs.indexOf(c); if (j >= 0) NPCs.splice(j, 1);
@@ -6030,7 +5796,6 @@ function resetNPCs() {
   }
 }
 
-/* ---- 地面拾取（放置 NPC） ---- */
 const _pickRay = new THREE.Raycaster();
 function pickGround(clientX, clientY) {
   const ndc = new THREE.Vector2((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
@@ -6056,22 +5821,16 @@ function pickGround(clientX, clientY) {
 }
 
 /* =====================================================================
-   31. ====== 飞机 ↔ 飞机 碰撞 ======
+   32. 飞机 ↔ 飞机 碰撞
    ===================================================================== */
 const _cpA = new THREE.Vector3(), _cpB = new THREE.Vector3(), _cpN = new THREE.Vector3();
 const _rotL = new THREE.Vector3();
-/* =====================================================================
-   统一撞击损伤模型 —— 按真实撞击能量实时算，不再写死"撞一次掉多少"
-     E   = ½·μ·v²         μ 为约化质量，撞"无限大质量"(地面)时取自身质量
-     dmg = (E - Emin·hard) / Eref / hard
-     hard 越大越抗撞：机头最硬，尾梁最脆
-   ===================================================================== */
 const PART_HARD = { nose: 1.65, skid: 1.30, belly: 1.00, tower: 0.90, tail: 0.75 };
-const BLADE_MASS = 55;                                   // 桨叶等效质量(kg)
-const DMG_GROUND = { Emin: 85000, Eref: 60000 };         // 触地
-const DMG_AIR    = { Emin: 60000, Eref: 70000 };         // 飞机 ↔ 飞机
-const DMG_TREE   = { Emin: 55000, Eref: 60000 };         // 飞机 ↔ 树木
-const DMG_CRASH_HIT = 0.80;                              // 单次撞击达到此值→结构失效
+const BLADE_MASS = 55;
+const DMG_GROUND = { Emin: 85000, Eref: 60000 };
+const DMG_AIR    = { Emin: 60000, Eref: 70000 };
+const DMG_TREE   = { Emin: 55000, Eref: 60000 };
+const DMG_CRASH_HIT = 0.80;
 
 function impactEnergy(selfMass, otherMass, relSpeed) {
   if (!(relSpeed > 0)) return 0;
@@ -6129,7 +5888,6 @@ function checkShatter(c) {
   const s = enterCraft(c); shatterBody(); exitCraft(c, s);
 }
 
-/* 旋翼盘面 vs 对方机体球 —— 谁把螺旋桨送进对方机身，谁的桨叶断 */
 function rotorVsBody(R, B) {
   if (spoolOf(R) < 0.30 || R.S.crashed) return;
   if (isShatteredOf(R) || isShatteredOf(B)) return;
@@ -6137,7 +5895,6 @@ function rotorVsBody(R, B) {
     const wp = _cpA.copy(pb.p).applyQuaternion(B.S.quat).add(B.S.pos);
     const hit = rotorDiscHit(R, wp, pb.r);
     if (!hit) continue;
-    /* 桨叶断掉，用桨盘最近的方位角判断是哪一片 */
     const broke = (R.isPlayer ? R.rotorCool <= 0 : R.rotorCool <= 0);
     if (!broke) break;
     const az = Math.atan2(hit.dx, hit.dz);
@@ -6159,13 +5916,9 @@ function rotorVsBody(R, B) {
       exitCraft(R, s);
     }
     R.rotorCool = 0.4;
-/* 撞上来的机身受损：桨叶很轻、又当场折断，
-   这里用"桨叶等效质量 + 相对接近速度"实时算能量 —— 结果就是
-   拿机头去撞别人的旋翼，自己几乎不掉血，对方却掉桨叶。 */
 const relSpd = _cpN.copy(R.S.vel).sub(B.S.vel).length();
 addDmg(B, impactDamage(B.params.mass, BLADE_MASS, relSpd,
                        pb.kind, DMG_AIR.Emin, DMG_AIR.Eref));
-    /* 互推 */
     _cpN.copy(wp).sub(R.S.pos); _cpN.y = 0;
     if (_cpN.lengthSq() < 1e-4) _cpN.set(1, 0, 0);
     _cpN.normalize();
@@ -6178,7 +5931,6 @@ addDmg(B, impactDamage(B.params.mass, BLADE_MASS, relSpd,
   }
 }
 
-/* 机体球 vs 机体球 */
 function bodyVsBody(A, B) {
   const pa = A.colPoints, pb = B.colPoints;
     for (let i = 0; i < pa.length; i++) {
@@ -6208,7 +5960,6 @@ function bodyVsBody(A, B) {
         B.S.vel.x -= nx * jimp / m2; B.S.vel.y -= ny * jimp / m2; B.S.vel.z -= nz * jimp / m2;
 const imp = -rel;
 if (imp > 0) {
-  /* 双方各自按"约化质量 + 法向接近速度"算能量，各撞各的 */
   const E = 0.5 * ((m1 * m2) / (m1 + m2)) * imp * imp;
   addDmg(A, dmgFromEnergy(E, ptA.kind, DMG_AIR.Emin, DMG_AIR.Eref));
   addDmg(B, dmgFromEnergy(E, ptB.kind, DMG_AIR.Emin, DMG_AIR.Eref));
@@ -6260,8 +6011,8 @@ function rotorVsRotor(A, B) {
   const dxz = Math.hypot(pa.x - pb.x, pa.z - pb.z);
   const rA = A.def.bladeReach[A.def.bladeReach.length - 1];
   const rB = B.def.bladeReach[B.def.bladeReach.length - 1];
-  if (dxz > rA + rB) return;      // 两桨盘在水平面不重叠
-  if (dy > 0.55) return;          // 不在同一个平面高度
+  if (dxz > rA + rB) return;
+  if (dy > 0.55) return;
   if (spA > 0.25) breakBladeNearest(A, pb);
   if (spB > 0.25) breakBladeNearest(B, pa);
   const nx = pa.x - pb.x, nz = pa.z - pb.z;
@@ -6278,22 +6029,17 @@ function craftCollisions() {
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const A = allCrafts[i], B = allCrafts[j];
-      if (A.isRemoteNPC || B.isRemoteNPC) continue; // 远程 NPC 镜像的状态完全由权威端广播驱动，本地不重复判定
+      if (A.isRemoteNPC || B.isRemoteNPC) continue;
       if (!A.model.group.visible || !B.model.group.visible) continue;
       if (isShatteredOf(A) || isShatteredOf(B)) continue;
-      /* 我方 NPC（本地权威）撞上对方玩家镜像（MP.remoteCraft）：
-         这次判定的结果只存在于本地镜像里，对方本人感受不到，
-         所以要拍快照、对比差异，把伤害量"回告"给对方。
-         纯双人对撞（双方各自都是自己那台飞机的权威）不需要这套，
-         各自本地算各自的、通过常规 st 同步即可。 */
       const npcVsRemote = (A.isNPC && !A.isRemoteNPC && B === MP.remoteCraft)
                         || (B.isNPC && !B.isRemoteNPC && A === MP.remoteCraft);
       let snap = null;
       if (npcVsRemote) snap = mpSnapshotRemoteCraft();
-      rotorVsRotor(A, B);       // ← 新增：桨叶 ↔ 桨叶
-      rotorVsBody(A, B);        // 桨叶 ↔ 对方机身
+      rotorVsRotor(A, B);
+      rotorVsBody(A, B);
       rotorVsBody(B, A);
-      bodyVsBody(A, B);         // 机身 ↔ 机身
+      bodyVsBody(A, B);
       if (snap) mpReportRemoteCraftDelta(snap);
     }
   }
@@ -6302,9 +6048,9 @@ function craftCollisions() {
 }
 
 /* =====================================================================
-   32. ====== 飞机 ↔ 树木 碰撞（机身撞树；力度不够树不倒） ======
+   33. 飞机 ↔ 树木 碰撞
    ===================================================================== */
-const TREE_FELL_SPEED = 7.0;      // 撞树倒下的速度阈值（m/s）
+const TREE_FELL_SPEED = 7.0;
 function craftTreeBody(c) {
   const S = c.S;
   if (isShatteredOf(c)) return;
@@ -6328,10 +6074,8 @@ function craftTreeBody(c) {
       const imp = Math.abs(vn);
       if (vn < 0) { S.vel.x -= nx * vn * 1.2; S.vel.z -= nz * vn * 1.2; }
       if (imp >= TREE_FELL_SPEED) {
-        /* 力度够 → 树被撞倒（倒向远离飞机的方向） */
         fellTree(tr, -nx, -nz, imp);
       } else if (imp > 1.0) {
-        /* 力度不够 → 树纹丝不动，飞机被弹开、轻微受损 */
         S.vel.y -= Math.min(1.2, imp * 0.15);
         addDmg(c, Math.max(0, imp - 4) * 0.03);
         if (c.isPlayer && imp > 5.5 && !H.crashed) {
@@ -6344,7 +6088,7 @@ function craftTreeBody(c) {
 }
 
 /* =====================================================================
-   33. 按钮 / 暂停菜单（二级菜单）
+   34. 按钮 / 暂停菜单
    ===================================================================== */
 const btnEngine = document.getElementById('btn-engine');
 const btnResetStub = { classList: { add() {}, remove() {} } };
@@ -6397,7 +6141,6 @@ function startPlacing(mode) {
   toast('点击地面放置 ' + MODE_NAME[mode] + ' NPC', 2.4);
 }
 
-/* 探照灯开关 */
 const btnSearch = document.getElementById('btn-search');
 let searchLightOn = false;
 function refreshSearchLightBtn() {
@@ -6420,7 +6163,6 @@ if (btnSearch) {
   };
 }
 
-/* ===================== 合成音效（无外部文件） ===================== */
 const gunAudio = {
   ctx: null,
   gunGain: null,
@@ -6437,7 +6179,6 @@ function initGunAudio() {
     const ctx = new Ctx();
     gunAudio.ctx = ctx;
 
-    /* 白噪声源 */
     const bufLen = Math.floor(ctx.sampleRate * 2);
     const noiseBuf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0);
@@ -6467,7 +6208,6 @@ function initGunAudio() {
     gunAudio.gunGain = gain;
     gunAudio.lfo = lfo;
 
-    /* 爆炸样本：0.6 秒衰减噪声 */
     const elen = Math.floor(ctx.sampleRate * 0.6);
     const ebuf = ctx.createBuffer(1, elen, ctx.sampleRate);
     const ed = ebuf.getChannelData(0);
@@ -6483,23 +6223,18 @@ function initGunAudio() {
   }
 }
 
-/* 保留原函数名：开火 */
 function gunAudioStart() {
   initGunAudio();
   if (!gunAudio.ready) return;
   if (gunAudio.ctx.state === 'suspended') gunAudio.ctx.resume();
 }
-/* 保留原函数名：停火（参数 silent 保留兼容，不用也行） */
 function gunAudioStop(silent) {
-  /* 停火由 updateGunAudio 每帧平滑收敛，这里什么都不用做 */
 }
 
-/* 每帧更新音量：玩家 + 最近开火的 NPC */
 function updateGunAudio() {
   if (!gunAudio.ready) return;
   const now = gunAudio.ctx.currentTime;
 
-  /* 玩家音量（按距离） */
   const dx = H.pos.x - camera.position.x;
   const dy = H.pos.y - camera.position.y;
   const dz = H.pos.z - camera.position.z;
@@ -6510,7 +6245,6 @@ function updateGunAudio() {
   else vP = 1.0 - (d - 60) / 540;
   const playerVol = (gunFiring ? 1 : 0) * vP * 0.5;
 
-  /* 最近开火的 NPC */
   let npcNearest = 1e9;
   for (const c of NPCs) {
     if (!c.gunFiring) continue;
@@ -6530,7 +6264,6 @@ function updateGunAudio() {
   gunAudio.gunGain.gain.setTargetAtTime(total, now, 0.05);
 }
 
-/* 火箭发射音（替代原 mp3） */
 function sAudioRocketLaunch() {
   initGunAudio();
   if (!gunAudio.ready) return;
@@ -6550,7 +6283,6 @@ function sAudioRocketLaunch() {
   osc.start(now); osc.stop(now + 0.42);
 }
 
-/* 爆炸音（替代原 mp3） */
 function sAudioExplosion(scale) {
   initGunAudio();
   if (!gunAudio.ready) return;
@@ -6566,7 +6298,6 @@ function sAudioExplosion(scale) {
   src.start(now);
 }
 
-/* ===================== 机炮系统 ===================== */
 let gunFiring = false;
 let gunShotCount = 0;
 let gunShotAccum = 0;
@@ -6581,23 +6312,21 @@ function canFireGun() {
   return true;
 }
 const GUN_RANGE = 900;
-const GUN_SPEED = 400;   /* 机炮初速 m/s */
-const GUN_TRACER_EVERY = 4; /* 每 4 发出一颗曳光弹，其余是不可见的命中判定 */
+const GUN_SPEED = 400;
+const GUN_TRACER_EVERY = 4;
 function fireOneBullet() {
   gunShotCount++;
   const origin = _gunOriginLocal.clone().applyQuaternion(H.quat).add(H.pos);
   const dir = _gunDirLocal.clone().applyQuaternion(H.quat).normalize();
 
-  /* 沿弹道积分：受重力影响，抛物线轨迹 */
   let px = origin.x, py = origin.y, pz = origin.z;
   let vx = dir.x * GUN_SPEED, vy = dir.y * GUN_SPEED, vz = dir.z * GUN_SPEED;
-const dtStep = 1 / 120;   /* 与主物理步长一致 */
+const dtStep = 1 / 120;
 const maxT = GUN_RANGE / GUN_SPEED;
 let hitPos = null, hitCraft = null;
 for (let t = 0; t < maxT; t += dtStep) {
   vy -= 9.81 * dtStep;
   px += vx * dtStep; py += vy * dtStep; pz += vz * dtStep;
-    /* 命中飞机 */
     for (const c of allCrafts) {
       if (c === player) continue;
       if (isShatteredOf(c)) continue;
@@ -6611,14 +6340,10 @@ for (let t = 0; t < maxT; t += dtStep) {
       if (hitCraft) break;
     }
     if (hitCraft) break;
-    /* 命中地形 */
     const gY = terrainHeight(px, pz);
     if (py <= gY) { hitPos = new THREE.Vector3(px, gY, pz); break; }
   }
 
-  /* ── 枪口火焰 ──
-   核心：朝前喷一簇橙色火球 + 一颗亮白核心，短促、方向性强。
-   每次都喷，不抽样。 */
 for (let k = 0; k < 6; k++) {
   const spread = 0.5;
   FX.emitFire(
@@ -6637,7 +6362,6 @@ for (let k = 0; k < 6; k++) {
     }
   );
 }
-/* 亮白核心：一帧内最亮，模拟枪口闪光的高光点 */
 FX.emitFire(origin.x, origin.y, origin.z, {
   vx: dir.x * 25, vy: dir.y * 25, vz: dir.z * 25,
   life: 0.04,
@@ -6647,7 +6371,6 @@ FX.emitFire(origin.x, origin.y, origin.z, {
   drag: 4.0, rise: 0
 });
 if (hitCraft) {
-  /* 打中的是联机对手镜像 → 需要把伤害回告给对方本人 */
   if (hitCraft === MP.remoteCraft) {
     const snap = mpSnapshotRemoteCraft();
     addDmg(hitCraft, 0.008);
@@ -6686,7 +6409,6 @@ if (btnFire) btnFire.addEventListener('click', () => {
 });
 refreshGunBtn();
 
-/* ===================== 火箭巢系统 ===================== */
 let rocketFiring = false;
 let rocketCool = 0;
 const ROCKET_INTERVAL = 0.5;
@@ -6705,7 +6427,6 @@ function canFireRocket() {
 function fireOneRocket() {
   const origin = _rocketOriginLocal.clone().applyQuaternion(H.quat).add(H.pos);
   const dir = _rocketDirLocal.clone().applyQuaternion(H.quat);
-  /* 发射瞬间的尾焰 */
   for (let i = 0; i < 8; i++) {
     FX.emitFire(origin.x, origin.y, origin.z, {
       vx: -dir.x * (6 + Math.random() * 4) + (Math.random() - 0.5) * 2,
@@ -6717,7 +6438,6 @@ function fireOneRocket() {
       alpha: 1.0
     });
   }
-  /* 真火箭：初速 120 m/s */
   spawnProjectile('rocket', origin, dir, 120);
 sAudioExplosion(0.6);
 sAudioRocketLaunch();
@@ -6741,9 +6461,7 @@ function refreshRocketBtn() {
   btnRocket.classList.toggle('on', rocketFiring);
   btnRocket.style.opacity = ok ? '1' : '0.4';
 }
-/* ===================== 真弹丸：火箭（机炮不用弹丸网格，改用射线判定+曳光/火花特效，见机炮系统） ===================== */
 const PROJECTILES = [];
-/* 尺寸对齐挂架上真实火箭巢的发射管口径（见短翼/挂架建模：tube 半径 0.045） */
 const _projGeoRocket = new THREE.CylinderGeometry(0.045, 0.045, 0.55, 10);
 _projGeoRocket.rotateX(-Math.PI / 2);
 const _projMatRocket = new THREE.MeshBasicMaterial({ color: 0x2a2a2a });
@@ -6782,7 +6500,6 @@ function stepProjectiles(dt) {
     p.mesh.position.addScaledVector(p.vel, dt);
     const wp = p.mesh.position;
 
-    /* 命中飞机 */
     let hitCraft = null;
     for (const c of allCrafts) {
       if (c === player) continue;
@@ -6793,7 +6510,6 @@ function stepProjectiles(dt) {
       }
       if (hitCraft) break;
     }
-    /* 命中地形 */
     const gy = terrainHeight(wp.x, wp.z);
     const hitGround = wp.y <= gy;
 
@@ -6817,7 +6533,6 @@ function stepProjectiles(dt) {
       continue;
     }
 
-    /* 火箭尾焰 + 烟迹 */
     if (p.type === 'rocket') {
       p.fireAccum += dt;
       if (p.fireAccum >= 0.08) {
@@ -6888,7 +6603,6 @@ if (_pm('pm-assist')) _pm('pm-assist').addEventListener('click', () => {
   if (assistLocked) { toast('电传辅助已损坏，请重置后再试', 2.0, true); return; }
   assist = !assist;
   if (assist && assistDamaged) {
-    /* 损坏状态：开启后随机 1~3 秒再次失效 */
     assistDamagedTimer = 1 + Math.random() * 2;
     toast('电传辅助已重启 · 但随时可能再次失效', 2.4, true);
   } else if (assist && controlLoss) {
@@ -6936,10 +6650,9 @@ function backToMainMenu() {
   document.body.classList.remove('playing');
   const sm = document.getElementById('start');
   if (sm) sm.style.display = '';
-  fadeInBGM(0.45,1.8); // 返回主菜单，BGM重新淡入播放
+  fadeInBGM(0.45,1.8);
 }
-/* 设置面板 */
-document.querySelectorAll('.seg').forEach(seg => {
+document.querySelectorAll('.seg:not([data-wx])').forEach(seg => {
   seg.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -6958,7 +6671,6 @@ document.querySelectorAll('.tgl').forEach(t => {
   });
 });
 
-/* 开始游戏 → 复位 → 自动进机库选机型 */
 function startRound() {
   resetHeli();
   openHangar();
@@ -6969,7 +6681,7 @@ function enterGame() {
     const sm = document.getElementById('start');
     if (sm) sm.style.display = 'none';
     document.body.classList.add('playing');
-    fadeOutBGM(0.5); // 进入游戏，BGM平滑淡出停止
+    fadeOutBGM(0.5);
   }
 }
 if (window.__HELI) {
@@ -6984,11 +6696,274 @@ if (window.__HELI) {
 }
 
 /* =====================================================================
-   34. 主循环
+   35. 天气系统 WX（v3：删除龙卷风/飓风，删除低空厚云幕，风场物理化）
    ===================================================================== */
 let lastTime = performance.now();
 let acc = 0, panelTimer = 1;
 const STEP = 1 / 120;
+
+const WX_DEF = {
+  clear:  { n:'晴天',   cloud:0.12, dark:0.00, fog:1.00, rain:0,    snow:0,    sand:0,    wind:0.0, gust:0.0, sky:0,        tint:0 },
+  partly: { n:'多云',   cloud:0.62, dark:0.12, fog:0.95, rain:0,    snow:0,    sand:0,    wind:0.2, gust:0.1, sky:0x9aa8b8, tint:0.20 },
+  overcast:{n:'阴天',   cloud:1.00, dark:0.50, fog:0.70, rain:0,    snow:0,    sand:0,    wind:0.3, gust:0.15,sky:0x7c8590, tint:0.60 },
+  fog:    { n:'大雾',   cloud:0.70, dark:0.30, fog:0.10, rain:0,    snow:0,    sand:0,    wind:0.1, gust:0.0, sky:0xaeb6bc, tint:0.75 },
+  rain:   { n:'小雨',   cloud:1.00, dark:0.58, fog:0.55, rain:0.45, snow:0,    sand:0,    wind:0.4, gust:0.2, sky:0x6c7680, tint:0.68 },
+  storm:  { n:'暴雨',   cloud:1.00, dark:0.80, fog:0.32, rain:1.00, snow:0,    sand:0,    wind:0.8, gust:0.5, sky:0x4a525c, tint:0.85 },
+  thunder:{ n:'雷暴',   cloud:1.00, dark:0.90, fog:0.30, rain:1.00, snow:0,    sand:0,    wind:0.9, gust:0.7, sky:0x3c434d, tint:0.90, light:1 },
+  snow:   { n:'小雪',   cloud:1.00, dark:0.32, fog:0.50, rain:0,    snow:0.45, sand:0,    wind:0.3, gust:0.1, sky:0xb4bcc6, tint:0.68 },
+  heavysnow:{n:'大雪',  cloud:1.00, dark:0.42, fog:0.30, rain:0,    snow:1.00, sand:0,    wind:0.4, gust:0.2, sky:0xc0c8d0, tint:0.78 },
+  blizzard:{ n:'雪暴',  cloud:1.00, dark:0.50, fog:0.10, rain:0,    snow:1.00, sand:0,    wind:1.3, gust:0.9, sky:0xd0d6dc, tint:0.92 },
+  sandstorm:{n:'沙尘暴',cloud:0.70, dark:0.35, fog:0.08, rain:0,    snow:0,    sand:1.00, wind:1.2, gust:0.8, sky:0xc09a5c, tint:0.94 }
+};
+const WX_BY_TERRAIN = {
+  hill:   ['clear','partly','overcast','fog','rain','storm','thunder'],
+  snow:   ['clear','partly','overcast','fog','snow','heavysnow','blizzard'],
+  desert: ['clear','partly','overcast','sandstorm']
+};
+const WX_WEIGHT = {
+  hill:   { clear:5, partly:4, overcast:3, fog:1.5, rain:2.5, storm:1.2, thunder:1 },
+  snow:   { clear:3, partly:3, overcast:3, fog:1, snow:3, heavysnow:1.5, blizzard:1 },
+  desert: { clear:7, partly:2.5, overcast:1, sandstorm:1.8 }
+};
+const WX = (() => {
+  const W = {
+    type: 'clear', cx: 0, cz: 0,
+    v: { cloud:0.12, dark:0, fog:1, rain:0, snow:0, sand:0, wind:0, gust:0, tint:0 },
+    skyCol: new THREE.Color(0x8ec2f0), tgtSky: new THREE.Color(0x8ec2f0),
+    nextTimer: 90, flash: 0, flashTimer: 6
+  };
+  const _c = new THREE.Color();
+  const _wTmp = new THREE.Vector3();
+  const lists = () => WX_BY_TERRAIN[settings.terrainStyle] || WX_BY_TERRAIN.hill;
+
+  /* ---------- 降水粒子（雨/雪/沙共用一个 Points） ---------- */
+  const BOX = 90, N = 2400, MAXP = { low: 700, mid: 1400, high: 2400 };
+  const pGeo = new THREE.BufferGeometry();
+  { const a = new Float32Array(N * 3), r = new Float32Array(N);
+    for (let i = 0; i < N; i++) { a[i*3]=Math.random()*BOX; a[i*3+1]=Math.random()*BOX; a[i*3+2]=Math.random()*BOX; r[i]=Math.random(); }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(a, 3));
+    pGeo.setAttribute('aR', new THREE.BufferAttribute(r, 1)); }
+  const pU = {
+    uCam:{value:new THREE.Vector3()}, uT:{value:0}, uBox:{value:BOX},
+    uFall:{value:new THREE.Vector3(0,-30,0)}, uSz:{value:60}, uCol:{value:new THREE.Color(0xcfe0f0)},
+    uA:{value:0.6}, uDens:{value:1}, uStreak:{value:1}, uSway:{value:0}, uPR:{value:1}
+  };
+  const pMat = new THREE.ShaderMaterial({
+    uniforms: pU, transparent: true, depthWrite: false, fog: false,
+    vertexShader: `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      attribute float aR; uniform vec3 uCam, uFall; uniform float uT, uBox, uSz, uDens, uSway, uPR;
+      varying float vA;
+      void main(){
+        vec3 p = position + uFall * uT * (0.75 + aR * 0.5);
+        p.x += sin(uT * 1.3 + aR * 40.0) * uSway; p.z += cos(uT * 1.1 + aR * 33.0) * uSway;
+        p = mod(p - uCam + uBox * 0.5, uBox) - uBox * 0.5;
+        vec4 mv = viewMatrix * vec4(p + uCam, 1.0);
+        gl_Position = projectionMatrix * mv;
+        #include <logdepthbuf_vertex>
+        float d = -mv.z;
+        gl_PointSize = clamp(uSz * uPR / max(d, 0.5), 1.0, 14.0 * uPR);
+        vA = (aR < uDens ? 1.0 : 0.0) * smoothstep(1.0, 6.0, d) * (1.0 - smoothstep(30.0, 45.0, d));
+      }`,
+    fragmentShader: `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uCol; uniform float uA, uStreak; varying float vA;
+      void main(){
+        #include <logdepthbuf_fragment>
+        if (vA < 0.01) discard;
+        vec2 q = gl_PointCoord - 0.5; float a;
+        if (uStreak > 0.5) a = smoothstep(0.5, 0.0, abs(q.x) * 7.0) * smoothstep(0.5, 0.2, abs(q.y));
+        else a = smoothstep(0.5, 0.15, length(q));
+        gl_FragColor = vec4(uCol, a * uA * vA);
+      }`
+  });
+  const precip = new THREE.Points(pGeo, pMat);
+  precip.frustumCulled = false; precip.renderOrder = 900; precip.visible = false;
+  scene.add(precip);
+
+  /* ---------- 风场（物理量，单位 m/s） ----------
+     返回某点某时刻的「空气速度」矢量。
+       · 风廓线：地面摩擦层内风速按 1/7 次幂律随高度增加
+       · 湍流：Perlin 噪声给出连续、可重复的阵风扰动，量纲同样是 m/s
+       · 风的「作用」由 physics() 里的空气动力统一计算，
+         这里只描述空气怎么动，不做任何力的近似。 */
+  W.field = function (out, x, y, z, t) {
+    const auto = settings.wxAutoWind !== false;
+    const wxSpd = auto ? W.v.wind * 12 : 0;
+    const base = settings.windSpd + wxSpd;
+
+    const h = Math.max(1, y);
+    const shear = Math.pow(h / 10, 0.143);
+
+    const gustAmp = W.v.gust * 7;
+    const n1 = perlin2(x * 0.0042 + t * 0.31, z * 0.0042 - t * 0.19);
+    const n2 = perlin2(x * 0.0125 - t * 0.47, z * 0.0125 + t * 0.33);
+    const gust = (n1 * 0.72 + n2 * 0.28) * gustAmp;
+
+    const spd = Math.max(0, base * shear + gust);
+    const dirR = (settings.windDir + n2 * 7) * D2R;
+    out.set(Math.sin(dirR) * spd, 0, -Math.cos(dirR) * spd);
+    return out;
+  };
+
+  /* ---------- 天气选择 ---------- */
+  function pickAuto() {
+    const st = settings.terrainStyle || 'hill', wt = WX_WEIGHT[st] || WX_WEIGHT.hill, ks = lists();
+    for (let tries = 0; tries < 6; tries++) {
+      let sum = 0; for (const k of ks) sum += wt[k] || 1;
+      let r = Math.random() * sum, pick = ks[0];
+      for (const k of ks) { r -= wt[k] || 1; if (r <= 0) { pick = k; break; } }
+      if (pick !== W.type || tries === 5) return pick;
+    }
+    return 'clear';
+  }
+  W.snap = function () {
+    const d = WX_DEF[W.type], v = W.v;
+    for (const key in v) v[key] = d[key] !== undefined ? d[key] : (key === 'fog' ? 1 : 0);
+    W.skyCol.copy(W.tgtSky);
+  };
+  W.set = function (k) {
+    W.type = k; const d = WX_DEF[k];
+    W.tgtSky.setHex(d.sky || 0x8ec2f0);
+    W.nextTimer = 100 + Math.random() * 100;
+    W.flashTimer = 2 + Math.random() * 4;
+  };
+
+  W.syncUI = function () {
+    const seg = document.getElementById('wxSeg');
+    if (seg) {
+      const list = ['auto'].concat(lists()), cur = list.includes(settings.wxType) ? settings.wxType : 'auto';
+      seg.innerHTML = list.map(k => '<button data-v="' + k + '"' + (k === cur ? ' class="on"' : '') + '>' + (k === 'auto' ? '自动' : WX_DEF[k].n) + '</button>').join('');
+    }
+    const sl = document.getElementById('windSl'), tx = document.getElementById('windTxt'), ar = document.getElementById('windArrow'), aw = document.getElementById('wxAutoWind');
+    if (sl) sl.value = settings.windSpd;
+    if (tx) tx.textContent = settings.windSpd === 0 ? '0 = 无风' : settings.windSpd + ' m/s（' + (settings.windSpd * 3.6).toFixed(0) + ' km/h）';
+    if (ar) ar.style.transform = 'rotate(' + settings.windDir + 'deg)';
+    if (aw) aw.classList.toggle('on', settings.wxAutoWind !== false);
+  };
+  W.save = () => { try { localStorage.setItem('heli2026_settings', JSON.stringify(settings)); } catch (e) {} };
+  let lastTerrain = '', lastSel = '', applied = false;
+  window.__wxApply = function () {
+    const st = settings.terrainStyle || 'hill';
+    if (st !== lastTerrain) {
+      lastTerrain = st;
+      if (settings.wxType !== 'auto' && !lists().includes(settings.wxType)) { settings.wxType = 'auto'; W.save(); }
+      lastSel = settings.wxType;
+      W.set(settings.wxType === 'auto' ? pickAuto() : settings.wxType);
+      W.snap(); applied = true;
+    }
+    W.syncUI();
+  };
+
+  const ARW = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+  const arrow = rad => ARW[Math.floor((((rad * 180 / Math.PI) % 360 + 360) % 360 + 22.5) / 45) % 8];
+  W.updateTag = function () {
+    const e = document.getElementById('wxTag'); if (!e) return;
+    const w = W.field(_wTmp, H.pos.x, H.pos.y, H.pos.z, simTime), yaw = bodyYaw(H.quat);
+    const s = WX_DEF[W.type].n + ' · 风 ' + arrow(Math.atan2(w.x, -w.z) + yaw) + ' ' + Math.hypot(w.x, w.z).toFixed(0) + ' m/s';
+    e.textContent = s;
+  };
+
+  let tagT = 0, phase = 0;
+  W.update = function (dt, tNow) {
+    if (!applied) window.__wxApply();
+    const tg = (settings.wxType !== 'auto' && lists().includes(settings.wxType)) ? settings.wxType : 'auto';
+    if (tg !== lastSel) { lastSel = tg; W.set(tg === 'auto' ? pickAuto() : tg); }
+    else if (tg === 'auto') { W.nextTimer -= dt; if (W.nextTimer <= 0) W.set(pickAuto()); }
+
+    const d = WX_DEF[W.type], v = W.v, k = 1 - Math.exp(-dt / 3.0);
+    for (const key in v) v[key] += ((d[key] !== undefined ? d[key] : (key === 'fog' ? 1 : 0)) - v[key]) * k;
+    W.skyCol.lerp(W.tgtSky, k);
+    const dark = v.dark, tint = v.tint, q = settings.quality;
+
+    /* ---- 光照 / 天空 ---- */
+    const lit = 1 - dark * 0.78;
+    sun.intensity *= lit; hemi.intensity *= (1 - dark * 0.38);
+    cloudSunNear.intensity *= lit; cloudSunFar.intensity *= lit;
+    _c.copy(W.skyCol).multiplyScalar(0.35 + 0.65 * clamp(sunElev * 1.6 + 0.5, 0.12, 1));
+    if (tint > 0.01) {
+      for (const u of ['uTop', 'uMid', 'uBottom']) skyUniforms[u].value.lerp(_c, tint * (u === 'uTop' ? 0.85 : 1));
+      scene.fog.color.lerp(_c, tint);
+    }
+
+    /* ---- 云（只剩两层高空云） ---- */
+    const wc = W.field(_wTmp, camera.position.x, camera.position.y, camera.position.z, tNow);
+    W.cx += wc.x * dt * 3; W.cz += wc.z * dt * 3;
+    const showC = settings.clouds;
+    for (const cl of cloudLayers) {
+      const cov = clamp(v.cloud * 1.08, 0, 1);
+      cl.mat.opacity = 0.9;
+      cl.mat.alphaTest = lerp(0.80, 0.05, cov);
+      const sh = 1 - dark * 0.72;
+      cl.mat.color.r *= sh; cl.mat.color.g *= sh; cl.mat.color.b *= sh;
+      if (tint > 0.01) cl.mat.color.lerp(_c, tint * 0.55);
+      cl.mesh.visible = showC;
+    }
+    /* 闪电 */
+    if (d.light) { W.flashTimer -= dt; if (W.flashTimer <= 0) { W.flash = 1; W.flashTimer = 3 + Math.random() * 9; } }
+    if (W.flash > 0.01) {
+      W.flash *= Math.exp(-dt * 9);
+      const fl = W.flash * (Math.random() > 0.35 ? 1 : 0.4);
+      hemi.intensity += fl * 1.6;
+      for (const u of ['uTop', 'uMid', 'uBottom']) skyUniforms[u].value.lerp(_c.setRGB(0.9, 0.93, 1.0), fl * 0.55);
+    }
+
+    /* ---- 降水 ---- */
+    const rain = v.rain, snow = v.snow, sand = v.sand, amt = Math.max(rain, snow, sand);
+    if (amt > 0.03) {
+      precip.visible = true;
+      phase += dt;
+      pU.uDens.value = clamp(amt, 0, 1) * ((MAXP[q] || 1400) / N);
+      pU.uCam.value.copy(camera.position); pU.uT.value = phase; pU.uPR.value = renderer.getPixelRatio();
+      const w = W.field(_wTmp, camera.position.x, camera.position.y, camera.position.z, tNow);
+      if (sand > snow && sand > rain) {
+        pU.uFall.value.set(w.x * 2.2, -1.5, w.z * 2.2); pU.uStreak.value = 0; pU.uSz.value = 40;
+        pU.uCol.value.setRGB(0.80, 0.64, 0.38); pU.uA.value = 0.55 * sand; pU.uSway.value = 1.5;
+      } else if (snow > rain) {
+        pU.uFall.value.set(w.x * 0.9, -4.5 - snow * 2, w.z * 0.9); pU.uStreak.value = 0; pU.uSz.value = 55;
+        pU.uCol.value.setRGB(0.95, 0.97, 1.0); pU.uA.value = 0.85; pU.uSway.value = 1.8 + snow;
+      } else {
+        pU.uFall.value.set(w.x * 0.8, -32 - rain * 10, w.z * 0.8); pU.uStreak.value = 1; pU.uSz.value = 46;
+        pU.uCol.value.setRGB(0.70, 0.78, 0.88); pU.uA.value = 0.42; pU.uSway.value = 0.0;
+      }
+    } else precip.visible = false;
+
+    tagT += dt; if (tagT > 0.4) { tagT = 0; W.updateTag(); }
+  };
+  W.applyFog = function () {
+    const f = clamp(W.v.fog, 0.06, 1);
+    if (f < 0.999) { scene.fog.near *= f; scene.fog.far *= lerp(0.18, 1, f); }
+  };
+  return W;
+})();
+
+/* ---- 天气 / 风力 设置 UI 事件 ---- */
+(() => {
+  const seg = document.getElementById('wxSeg');
+  if (seg) seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    seg.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on');
+    settings.wxType = b.dataset.v; WX.save();
+  });
+  const sl = document.getElementById('windSl'), dial = document.getElementById('windDial'), aw = document.getElementById('wxAutoWind');
+  sl.addEventListener('input', () => { settings.windSpd = +sl.value; WX.syncUI(); WX.save(); });
+  const setFromPtr = e => {
+    const r = dial.getBoundingClientRect();
+    const a = Math.atan2(e.clientX - (r.left + r.width / 2), -(e.clientY - (r.top + r.height / 2))) * 180 / Math.PI;
+    settings.windDir = Math.round((a + 360) % 360);
+    document.getElementById('windArrow').style.transform = 'rotate(' + settings.windDir + 'deg)';
+  };
+  let drag = false;
+  dial.addEventListener('pointerdown', e => { drag = true; dial.setPointerCapture(e.pointerId); setFromPtr(e); });
+  dial.addEventListener('pointermove', e => { if (drag) setFromPtr(e); });
+  const end = () => { if (drag) { drag = false; WX.save(); } };
+  dial.addEventListener('pointerup', end); dial.addEventListener('pointercancel', end);
+  aw.addEventListener('click', () => { aw.classList.toggle('on'); settings.wxAutoWind = aw.classList.contains('on'); WX.save(); });
+  WX.syncUI();
+})();
+
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -7001,15 +6976,15 @@ function loop(now) {
     return;
   }
 
-  /* ---- 定步长物理：玩家 + 所有 NPC ---- */
+  /* ---- 定步长物理 ---- */
   acc += dt;
   let iter = 0;
   while (acc >= STEP && iter < 8) {
     physics(STEP, simTime);
     for (let i = 0; i < NPCs.length; i++) { if (!NPCs[i].isRemoteNPC) stepNPC(NPCs[i], STEP, simTime); }
-    craftCollisions();                         // 飞机 ↔ 飞机
-    for (const c of allCrafts) { if (!c.isRemoteNPC) craftTreeBody(c); } // 飞机 ↔ 树木（远程 NPC 镜像不做本地权威判定）
-    stepTreeFall(STEP);                        // 树倒了
+    craftCollisions();
+    for (const c of allCrafts) { if (!c.isRemoteNPC) craftTreeBody(c); }
+    stepTreeFall(STEP);
     simTime += STEP; acc -= STEP; iter++;
   }
   if (iter >= 8) acc = 0;
@@ -7029,31 +7004,28 @@ mpSyncNPCModels();
     syncNPCModel(c);
     if (c.S.crashed && !c.isRemoteNPC) {
   c.deathTimer += dt;
-  if (c.deathTimer > 5) removeNPC(c);   // 坠毁 5 秒后连残骸一起清掉（权威端才会真正移除并广播）
+  if (c.deathTimer > 5) removeNPC(c);
 }
   }
-  updateGun(dt);                               // 机炮开火
-updateGunAudio();                            // 机炮音量随距离
-updateRocket(dt);                            // 火箭巢开火
-stepProjectiles(dt);                      // 弹丸飞行（临时禁用排查）
-updateCockpitControls();                     // 玩家座舱摇杆
+  updateGun(dt);
+updateGunAudio();
+updateRocket(dt);
+stepProjectiles(dt);
+updateCockpitControls();
 
 
-/* ★ FX：每架 craft 分别发射粒子（玩家 + 本地 NPC + 远程镜像都覆盖） */
 if (!inMenu) {
-  /* 玩家：核心舱对象是 AC.fuselage */
   FX.emitForCraft(dt, player, AC ? AC.fuselage : null);
-  /* 本地 NPC + 远程镜像：核心舱对象是 c.model.fuselage */
   for (let i = 0; i < NPCs.length; i++) {
     const c = NPCs[i];
     FX.emitForCraft(dt, c, c.model ? c.model.fuselage : null);
   }
-  /* 联机远程玩家镜像 */
   if (MP.remoteCraft) FX.emitForCraft(dt, MP.remoteCraft, MP.remoteModel ? MP.remoteModel.fuselage : null);
   FX.step(dt);
 }
 
   updateDayNight(dt);
+  WX.update(dt, now * 0.001);
   updateNavLights(now * 0.001);
   lodUpdate(H.pos.x, H.pos.z);
 
@@ -7065,6 +7037,7 @@ if (!inMenu) {
   const fogFactor = clamp(1 - H.pos.y / (v.fogFar * 1.6), 0, 1);
   scene.fog.near = lerp(v.fogFar * 2.4, v.fogNear, fogFactor);
   scene.fog.far  = lerp(v.fogFar * 3.4, v.fogFar, fogFactor);
+  WX.applyFog();
   const fa = altFactor;
   farGroundMat.color.setRGB(lerp(0.330, 0.22, fa), lerp(0.514, 0.40, fa), lerp(0.251, 0.66, fa));
 
@@ -7072,7 +7045,7 @@ if (!inMenu) {
     for (const cl of cloudLayers) {
       cl.mesh.position.x = camera.position.x;
       cl.mesh.position.z = camera.position.z;
-      cl.tex.offset.set(camera.position.x / cl.tile, -camera.position.z / cl.tile);
+      cl.tex.offset.set((camera.position.x - WX.cx) / cl.tile, -(camera.position.z - WX.cz) / cl.tile);
     }
     const CX = sunDirVec.x * 2000, CZ = sunDirVec.z * 2000;
     cloudSunNear.position.set(H.pos.x + CX, 3200, H.pos.z + CZ);
@@ -7158,7 +7131,7 @@ initPlayerCraft();
 resetHeli();
 updateHUDType();
 /* =====================================================================
-   35. ====== 局域网联机（1v1 · WebRTC DataChannel） ======
+   36. 局域网联机（1v1 · WebRTC DataChannel）
    ===================================================================== */
 const MP = {
   enabled: false,
@@ -7549,11 +7522,6 @@ function mpRemoveRemote() {
   MP.remoteModel = null;
   MP.remoteCraft = null;
 }
-/* ---- 我方 NPC 撞到对方玩家（镜像）时，把伤害"回告"给对方本人 ----
-   host/guest 本地都可能出现 MP.remoteCraft 被本地 NPC 碰撞判定改动，
-   但那只是镜像，对方真实的全局变量不会变，下一次 st 同步还会把镜像的
-   hullDamage 覆盖回对方自己的值——所以必须把这次判定的"增量"发过去，
-   让对方应用到自己真实状态上。 */
 function mpSnapshotRemoteCraft() {
   const S = MP.remoteCraft.S;
   return {
@@ -7591,14 +7559,13 @@ function mpCheckShatterRemoteCraft() {
   if (MP.remoteModel) MP.remoteModel.group.visible = false;
   mpReportRemoteCraftDelta(snap);
 }
-/* 收到对方发来的"你被我这边的 NPC/物理判定打了多少伤害"，应用到本机真实状态 */
 function mpApplyDamageReport(msg) {
   hullDamage += msg.hd || 0;
   rotorDamage += msg.rd || 0;
   if (msg.dv) { H.vel.x += msg.dv[0]; H.vel.y += msg.dv[1]; H.vel.z += msg.dv[2]; }
   if (msg.da) { H.avel.x += msg.da[0]; H.avel.y += msg.da[1]; H.avel.z += msg.da[2]; }
   if (msg.shattered && !H.crashed) {
-    if (hullDamage <= 2.0) hullDamage = 2.01; // 保证下一次 checkShatter 会触发解体
+    if (hullDamage <= 2.0) hullDamage = 2.01;
   }
 }
 function mpSyncRemoteModel() {
@@ -7610,10 +7577,6 @@ function mpSyncRemoteModel() {
   MP.remoteModel.mainRotor.rotation.y = s.ra;
   MP.remoteModel.tailRotor.rotation.x = s.ta;
   if (MP.remoteCraft) {
-    /* 对方重置了飞机：只要"这次同步来的伤害是 0"但本地此刻仍是散架状态
-       （shattered / group 被隐藏 / 还有残骸没清），就强制复原。
-       用 nowClean 单独判断、不依赖上一次的伤害值，避免跟本地
-       craftCollisions()/checkShatter() 的写入产生时序竞争。 */
     const nowClean = s.hd === 0 && s.rd === 0;
     const stillWrecked = MP.remoteCraft.S.shattered || !MP.remoteModel.group.visible
       || (MP.remoteCraft.debris && MP.remoteCraft.debris.length > 0);
@@ -7676,7 +7639,7 @@ function mpTickSendNPC(now) {
   if (now - MP.lastNPCSend < MP.npcSendInterval * 1000) return;
   MP.lastNPCSend = now;
   for (const c of NPCs) {
-    if (c.isRemoteNPC) continue; // 只广播本地拥有（本机放置）的 NPC，镜像不回传
+    if (c.isRemoteNPC) continue;
     mpSendNPCState(c);
   }
 }
@@ -7701,8 +7664,6 @@ function mpSendNPCState(c) {
     crashed: !!c.S.crashed, shattered: !!c.S.shattered
   });
 }
-/* 新连接建立时，把本机已放置的全部 NPC（含当前伤害/坠毁进度）一次性同步给对方，
-   否则对方只有连接之后新放置的 NPC 才看得到 */
 function mpSendAllLocalNPCs() {
   for (const c of NPCs) {
     if (c.isRemoteNPC) continue;
@@ -7715,19 +7676,18 @@ function mpSendAllLocalNPCs() {
 }
 function mpHandleNPCAdd(msg) {
   if (!msg.id || !AIRCRAFT[msg.defId] || !MODE_NAME[msg.mode]) return;
-  if (NPCs.some(c => c.id === msg.id)) return; // 已存在，避免重复生成
+  if (NPCs.some(c => c.id === msg.id)) return;
   spawnNPC(msg.mode, { x: msg.x, z: msg.z }, { npcId: msg.id, defId: msg.defId, isRemoteNPC: true });
 }
 function mpHandleNPCState(msg) {
   const c = NPCs.find(n => n.id === msg.id && n.isRemoteNPC);
-  if (!c) return; // 还没收到对应的 npc-add，或已被移除
-  c._netState = msg; // 缓存，实际应用放到 mpSyncNPCModels 里统一做（避免和本帧物理写入打架）
+  if (!c) return;
+  c._netState = msg;
 }
 function mpHandleNPCRemove(msg) {
   const c = NPCs.find(n => n.id === msg.id);
   if (c) removeNPC(c, { fromRemote: true });
 }
-/* 每帧把收到的远程 NPC 状态应用到镜像模型上（渲染层，不参与本地物理判定） */
 function mpSyncNPCModels() {
   for (const c of NPCs) {
     if (!c.isRemoteNPC || !c._netState) continue;
