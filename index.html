@@ -483,7 +483,7 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <button id="btn-donate" class="ghost">捐 赠</button>
   <button id="btn-credits" class="ghost">制 作 人 员</button>
 </div>
-  <div class="corner">v8.5</div>
+  <div class="corner">v0.8.7</div>
 </div>
 
 <div id="mapselect">
@@ -597,7 +597,7 @@ CNYSZB/走位很呆/CNY
 飞机模型：deepseek v4.1 Flash
 
 # 音效
-音效设计：CNYSZB/走位很呆/CNY & 豆包
+音效设计：CNYSZB/走位很呆/CNY & 海洛ai
 
 # 特别鸣谢
 小金和小小：他让我意识到AI也能做出很好的作品!
@@ -4991,7 +4991,7 @@ let audioUnlocked = false;
 
 function createBGMIfNeed() {
     if (!bgm) {
-        bgm = new Audio('1.mp3');
+        bgm = new Audio(Math.random() < 0.5 ? '1.mp3' : '2.mp3');
         bgm.loop = true;
         bgm.volume = 0;
     }
@@ -7619,7 +7619,7 @@ window.addEventListener('orientationchange', () => {
 });
 
 /* ---------- 启动（一次性初始化） ---------- */
-async function tryAutoPlayBGM() {
+async function tryAutoPlayBGM() { bgm = null; bgmStarted = false;
   createBGMIfNeed();
   try {
     await bgm.play();
