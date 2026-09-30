@@ -277,6 +277,107 @@
   border:1px solid rgba(100,190,220,.5);font-family:inherit;font-size:13px;letter-spacing:2px;
   background:rgba(30,90,110,.5);color:#eaffff;}
 #btn-hangar-close:active{background:rgba(50,140,175,.6);}
+#btn-decal{position:relative;z-index:6;flex:0 0 auto;width:min(300px,70vw);padding:9px 0;border-radius:2px;cursor:pointer;
+  border:1px solid rgba(110,220,170,.5);font-family:inherit;font-size:13px;letter-spacing:2px;background:rgba(20,70,56,.5);color:#eafff6;}
+#dc-panel{position:absolute;left:0;right:0;bottom:0;z-index:10;display:none;flex-direction:column;gap:8px;
+  padding:10px 12px calc(12px + env(safe-area-inset-bottom));background:rgba(4,10,18,.97);border-top:1px solid rgba(80,160,190,.4);}
+#dc-panel.show{display:flex;}
+
+/* ===== 贴纸模式：隐藏机型切换相关 UI ===== */
+#hangar.decal-mode .hg-title,
+#hangar.decal-mode .hg-list,
+#hangar.decal-mode #btn-decal,
+#hangar.decal-mode #btn-hangar-close{ display:none !important; }
+/* 贴纸模式下预览区可占满更多空间 */
+#hangar.decal-mode .hg-view{ height:min(58vh,560px); }
+
+/* ===== 贴纸面板：左侧竖排 ===== */
+#dc-panel{
+  left:0; right:auto; top:0; bottom:0;
+  width:min(46vw, 300px);
+  border-top:none; border-right:1px solid rgba(80,160,190,.4);
+  overflow-y:auto;
+  padding:calc(10px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
+}
+/* 预览区在贴纸模式下留出左侧面板空间 */
+#hangar.decal-mode .hg-view{
+  width:calc(100% - min(46vw,300px) - 12px);
+  height:auto;
+  margin-left:calc(min(46vw,300px) + 12px);
+  align-self:flex-start;
+  flex:1 1 auto;
+}
+#hangar.decal-mode{ align-items:flex-start; }
+#dc-info{font-size:11.5px;line-height:1.5;color:#9fdcff;min-height:17px;}
+#dc-chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;min-height:0;}
+.dc-chip{flex:0 0 auto;padding:4px 10px;border-radius:2px;font-family:inherit;font-size:12px;color:#dff3ff;
+  border:1px solid rgba(80,160,190,.4);background:rgba(14,30,42,.7);}
+.dc-chip.on{border-color:rgba(110,220,170,.8);background:rgba(16,52,44,.8);}
+.dc-row{display:flex;gap:8px;align-items:stretch;}
+.dc-row button,.dc-row select{flex:1 1 0;min-width:0;padding:9px 4px;border-radius:2px;font-family:inherit;font-size:12.5px;
+  border:1px solid rgba(100,190,220,.5);background:rgba(30,90,110,.5);color:#eaffff;}
+.dc-row select{background:rgba(14,30,42,.9);}
+#dc-del{border-color:rgba(230,110,110,.6);background:rgba(90,30,30,.5);}
+#dc-done{border-color:rgba(110,220,170,.6);background:rgba(20,80,60,.6);}
+#dc-gz{position:absolute;left:0;top:0;width:100%;height:100%;z-index:4;pointer-events:none;display:none;overflow:hidden;}
+#dc-gz .gz-ring{position:absolute;border:2px dashed rgba(120,240,200,.85);border-radius:50%;pointer-events:none;box-sizing:border-box;}
+#dc-gz .gz-k{position:absolute;pointer-events:auto;touch-action:none;display:flex;align-items:center;justify-content:center;
+  font-size:15px;color:#04140e;background:rgba(120,240,200,.95);border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.5);
+  transform:translate(-50%,-50%);user-select:none;-webkit-user-select:none;}
+#dc-gz .gz-mv{width:40px;height:40px;border-radius:50%;}
+#dc-gz .gz-rt{width:34px;height:34px;border-radius:50%;background:rgba(255,214,120,.97);}
+#dc-gz .gz-sc{width:32px;height:32px;border-radius:4px;background:rgba(150,200,255,.97);}
+/* ===== 贴纸改名浮层 ===== */
+#dc-rename{
+  position:fixed;inset:0;z-index:200;display:none;
+  align-items:center;justify-content:center;padding:16px;
+  background:rgba(2,6,11,.72);
+}
+#dc-rename.show{display:flex;}
+#dc-rename .rnbox{
+  width:min(340px,92vw);padding:18px 18px 14px;border-radius:4px;
+  background:rgba(10,20,28,.98);
+  border:1px solid rgba(80,160,190,.4);
+  box-shadow:0 6px 24px rgba(0,0,0,.5);
+}
+#dc-rename .rntitle{
+  font-size:13px;letter-spacing:3px;color:#cdf3ff;text-align:center;
+  padding-bottom:10px;margin-bottom:12px;border-bottom:1px solid rgba(80,160,190,.2);
+}
+#dc-rename .rninput{
+  width:100%;padding:11px 12px;border-radius:2px;
+  font-family:inherit;font-size:14px;letter-spacing:1px;
+  color:#eaffff;background:rgba(8,18,26,.95);
+  border:1px solid rgba(80,160,190,.4);
+  box-sizing:border-box;outline:none;
+}
+#dc-rename .rninput:focus{
+  border-color:rgba(120,210,235,.8);
+  box-shadow:0 0 0 2px rgba(80,160,190,.18);
+}
+#dc-rename .rnhint{
+  margin-top:8px;font-size:10px;color:#54788c;text-align:center;letter-spacing:.5px;
+}
+#dc-rename .rnrow{
+  display:flex;gap:8px;margin-top:14px;
+}
+#dc-rename .rnrow button{
+  flex:1;padding:10px 0;border-radius:2px;cursor:pointer;
+  font-family:inherit;font-size:13px;letter-spacing:2px;
+  border:1px solid rgba(100,190,220,.5);
+  background:rgba(30,90,110,.5);color:#eaffff;
+}
+#dc-rename .rnrow button:active{background:rgba(50,140,175,.6);}
+#dc-rename .rnrow #rn-clear{
+  border-color:rgba(200,150,90,.5);
+  background:rgba(80,50,20,.5);color:#ffd9a8;
+}
+#dc-rename .rnrow #rn-clear:active{background:rgba(120,80,30,.6);}
+#dc-rename .rnrow #rn-ok{
+  border-color:rgba(110,220,170,.6);
+  background:rgba(20,80,60,.6);color:#eafff6;
+}
+#dc-rename .rnrow #rn-ok:active{background:rgba(30,120,90,.7);}
 
 /* ================= 暂停菜单（二级菜单） ================= */
 #pause{position:fixed;inset:0;z-index:118;display:flex;align-items:center;justify-content:center;
@@ -524,7 +625,7 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <button id="btn-credits" class="ghost">制 作 人 员</button>
   </div>
 </div>
-  <div class="corner">v0.9.0</div>
+  <div class="corner">v1.0.0</div>
 </div>
 
 <div id="mapselect">
@@ -687,7 +788,39 @@ CNYSZB/走位很呆/CNY
     <div class="hg-hint">拖动旋转视角 · 双指缩放</div>
   </div>
   <div class="hg-list" id="hg-list"></div>
+  <button id="btn-decal">🎨 贴 纸</button>
   <button id="btn-hangar-close">返 回</button>
+  <input type="file" id="dc-file" accept="image/*" style="display:none">
+  <div id="dc-panel">
+    <div id="dc-info"></div>
+    <div id="dc-chips"></div>
+    <div class="dc-row">
+  <button id="dc-add">＋ 添加图片</button>
+  <button id="dc-fp">👁 座舱视角</button>
+</div>
+<div class="dc-row">
+  <button id="dc-mirror">⇄ 镜像</button>
+</div>
+    <div class="dc-row">
+      <select id="dc-comp"></select>
+      <button id="dc-comp-btn">压缩分辨率</button>
+      <button id="dc-del">🗑 删除</button>
+      <button id="dc-done">完成</button>
+    </div>
+  </div>
+</div>
+
+<div id="dc-rename">
+  <div class="rnbox">
+    <div class="rntitle">重 命 名 贴 纸</div>
+    <input id="rn-input" class="rninput" type="text" maxlength="12" placeholder="输入名称（最多12字）">
+    <div class="rnhint">留空 = 恢复默认编号</div>
+    <div class="rnrow">
+      <button id="rn-clear">清 空</button>
+      <button id="rn-cancel">取 消</button>
+      <button id="rn-ok">确 定</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1443,7 +1576,7 @@ function emitTracer(x, y, z, dx, dy, dz) {
       }
     }
 
-    if (crashed) {
+    if (shat || S.fire) {
       const burnK = shat ? 1.6 : (1 + clamp(S.crashTimer / 4, 0, 1) * 0.8);
       let cx = hp.x, cy = hp.y + 0.4, cz = hp.z;
       if (coreObj) {
@@ -3751,6 +3884,9 @@ function createAircraft(def) {
   });
   m.cockpit.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   m.group.visible = true;
+  m._dcMeshes = [];
+  m.group.traverse(o => { if (o.isMesh) m._dcMeshes.push(o); });
+  decalApply(m, def.id);
   return m;
 }
 /* =====================================================================
@@ -3793,6 +3929,65 @@ let assistWarned = false;
 let controlWarned = false;
 const ASSIST_DMG_THRESHOLD = 0.50;
 const CONTROL_LOSS_THRESHOLD = 0.50;
+
+/* ████████████████████████████████████████████████████████████████
+   ★★★【DMG_CFG】损伤系统参数 —— 想调整损坏/起火/爆炸手感，只改这里 ★★★
+   状态流转：正常 → 损坏(crashed) → 漏油起火(fire) → 爆炸(shatterBody)
+   ████████████████████████████████████████████████████████████████ */
+const DMG_CFG = {
+  crashExplodeSev: 30,      // 【立刻爆炸·严重度】registerCrash 的撞击严重度(≈撞击速度 m/s) ≥ 此值 → 直接爆炸
+  instantExplodeMul: 4.0,   // 【立刻爆炸·单次地面冲击】单次撞击伤害 ≥ DMG_CRASH_HIT × 此倍数 → 直接爆炸
+  damagedHullAt: 0.50,      // 机体累计伤害 ≥ 此值也视为"已损坏"，可漏油
+  fireChance: 0.35,         // 【漏油起火概率】已损坏时，每次受伤(≥fireRollMinHit)触发起火的概率 0~1
+  fireRollMinHit: 0.05,     // 单次伤害小于此值不掷骰
+  fireRollCooldown: 0.6,    // 两次起火掷骰最短间隔(秒)
+  cumFireAt: 2.0,           // 累计伤害首次达到此值，额外掷一次起火
+  cumFireChance: 0.7,       // ↑ 这次额外起火的概率
+  cumExplodeAt: 5.0         // 【累计爆炸】累计伤害 ≥ 此值直接爆炸(原版是 2.0)
+};
+const FIRE_CFG = {
+  explodeChance: 0.5,       // 【起火后会爆炸的概率】
+  explodeMinT: 3,           // 会爆炸时：起火后最早几秒爆炸
+  explodeMaxT: 15,          // 会爆炸时：起火后最晚几秒爆炸
+  burnTime: 60,             // 不会爆炸的火，燃烧多少秒后自行熄灭
+  chaosTorque: 2.5          // 【失控强度】起火后飞行中的随机扰动(越大越乱，0=不乱)
+};
+function igniteFire(S, toastOn) {
+  if (!S || S.fire || S.shattered) return;
+  S.fire = 1; S.fireT = 0;
+  S.fireWillExplode = Math.random() < FIRE_CFG.explodeChance;
+  S.fireExplodeAt = FIRE_CFG.explodeMinT + Math.random() * (FIRE_CFG.explodeMaxT - FIRE_CFG.explodeMinT);
+  if (toastOn) toast('🔥 漏油起火 · 机体失控！', 3.0, true);
+}
+function dmgRollFire(S, hull, toastOn, hitDmg) {
+  if (!S || S.fire || S.shattered) return;
+  if ((S.fireCool || 0) > 0) return;
+  if (hitDmg < DMG_CFG.fireRollMinHit) return;
+  if (!(S.crashed || hull >= DMG_CFG.damagedHullAt)) return;
+  S.fireCool = DMG_CFG.fireRollCooldown;
+  if (Math.random() < DMG_CFG.fireChance) igniteFire(S, toastOn);
+}
+/* 在 physics() 上下文内每帧调用(玩家/NPC 通用) */
+function dmgFireStep(dt) {
+  if (shattered) return;
+  if ((H.fireCool || 0) > 0) H.fireCool -= dt;
+  if (hullDamage >= DMG_CFG.cumExplodeAt) { shatterBody(); return; }
+  if (hullDamage >= DMG_CFG.cumFireAt && !H.cumFireRolled) {
+    H.cumFireRolled = 1;
+    if (Math.random() < DMG_CFG.cumFireChance) igniteFire(H, !toastMute);
+  }
+  if (!H.fire) return;
+  H.fireT += dt;
+  if (H.pos.y < WATER_Y + 0.2 || (!H.fireWillExplode && H.fireT > FIRE_CFG.burnTime)) { H.fire = 0; return; }
+  if (!H.crashed) {
+    controlLoss = true; assist = false; if (!toastMute) assistLocked = true;
+    const k = FIRE_CFG.chaosTorque * dt;
+    H.avel.x += (Math.random() - 0.5) * k;
+    H.avel.y += (Math.random() - 0.5) * k;
+    H.avel.z += (Math.random() - 0.5) * k;
+  }
+  if (H.fireWillExplode && H.fireT >= H.fireExplodeAt) shatterBody();
+}
 let inMenu = true, hangarOpen = false;
 let engineOn = false, rotorSpool = 0, rotorAngle = 0, tailAngle = 0, groundContacts = 0;
 
@@ -3831,6 +4026,7 @@ function resetHeli() {
   H.vel.set(0, 0, 0); H.quat.identity(); H.avel.set(0, 0, 0);
   H.coll = 0; H.rho = 1;
   H.onGround = true; H.crashed = false; H.crashTimer = 0; H.vortex = false;
+  H.fire = 0; H.fireT = 0; H.fireCool = 0; H.cumFireRolled = 0;
   engineOn = false; rotorSpool = 0;
   rotorAngle = 0; tailAngle = 0;
 hullDamage = 0; rotorDamage = 0;
@@ -4300,7 +4496,8 @@ if (cp.cool <= 0 && vn < 0) {
     cp.cool = 0.6;
     hullDamage += dmg;
     if (dmg >= DMG_CRASH_HIT && !H.crashed) registerCrash('机体撞击地面结构损坏', impact);
-    if (hullDamage > 2.0) shatterBody();
+    if (dmg >= DMG_CRASH_HIT * DMG_CFG.instantExplodeMul) shatterBody();
+    else dmgRollFire(H, hullDamage, !toastMute, dmg);
   }
 }
   }
@@ -4389,6 +4586,7 @@ if (!toastMute && assistLocked && hullDamage < ASSIST_DMG_THRESHOLD && rotorDama
   }
 }
 
+  dmgFireStep(dt);
   if (H.crashed) {
     H.crashTimer += dt;
     if (!shattered) {
@@ -4642,15 +4840,16 @@ function registerCrash(reason, severity) {
     if (btnReset) btnReset.classList.add('alert');
     if (pauseBtn) pauseBtn.classList.add('alert');
   }
-FX.emitExplosion(H.pos.x, H.pos.y, H.pos.z, 1.0 + clamp((severity || 8) / 20, 0, 1) * 1.2);
+// （原版此处无条件爆炸特效；现改为：只有 shatterBody 才爆炸）
   const sev = clamp(severity || 8, 4, 30);
   H.vel.x += (Math.random() - 0.5) * sev * 0.22;
   H.vel.z += (Math.random() - 0.5) * sev * 0.22;
   H.avel.x += (Math.random() - 0.5) * sev * 0.26;
   H.avel.y += (Math.random() - 0.5) * sev * 0.26;
   H.avel.z += (Math.random() - 0.5) * sev * 0.26;
-  if (sev > 20 && !shattered) shatterBody();
-  toast('💥 ' + reason + ' · 打开菜单即可重置', 3, true);
+  if ((severity || 0) >= DMG_CFG.crashExplodeSev && !shattered) shatterBody();
+  else dmgRollFire(H, hullDamage, !toastMute, 999);
+  toast('🔧 ' + reason + ' · 机体损坏 · 打开菜单即可重置', 3, true);
 }
 
 /* =====================================================================
@@ -5230,8 +5429,9 @@ function updateHUD(dt) {
   const mMax = AC.mainBlades.length;
   let s;
   if (H.crashed) {
-    s = shattered ? '<span class="bad">坠毁</span> · 打开菜单重置' : '<b>已坠毁</b> · 打开菜单重置';
-  } else if (mB === 0) s = '<span class="bad">主旋翼完全失效</span>';
+    s = shattered ? '<span class="bad">坠毁</span> · 打开菜单重置' : (H.fire ? '<span class="bad">🔥 起火失控</span>' : '<b>机体损坏</b>') + ' · 打开菜单重置';
+  } else if (H.fire) s = '<span class="bad">🔥 漏油起火 · 失控中</span>';
+  else if (mB === 0) s = '<span class="bad">主旋翼完全失效</span>';
   else if (mB < mMax) s = '<span class="bad">主旋翼仅剩 ' + mB + ' 片 · 升力不足</span>';
   else if (tB === 0) s = '<span class="bad">尾桨全部脱落 · 机头失去控制</span>';
   else if (tB === 1) s = '<span class="warn">尾桨仅剩 1 片 · 偏航不稳</span>';
@@ -5501,25 +5701,584 @@ function updatePreview(dt) {
     pv.camera.aspect = w / h;
     pv.camera.updateProjectionMatrix();
   }
-  if (!pv.dragging) { pv.idle += dt; if (pv.idle > 1.5) pv.yawT += dt * 0.36; }
+  if (!pv.dragging && !dcSt.on) { pv.idle += dt; if (pv.idle > 1.5) pv.yawT += dt * 0.36; }
   const k = 1 - Math.exp(-9 * dt);
   pv.yaw   += (pv.yawT   - pv.yaw)   * k;
   pv.pitch += (pv.pitchT - pv.pitch) * k;
   pv.dist  += (pv.distT  - pv.dist)  * k;
   const cy = Math.cos(pv.pitch);
+  if (dcSt.fp && pv.model) {
+    const g = pv.model.group; g.updateMatrixWorld(true);
+    pv.camera.position.copy(g.localToWorld(pv.model.def.eye.clone()));
+    pv.camera.quaternion.copy(g.quaternion).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(dcSt.fpPitch, dcSt.fpYaw, 0, 'YXZ')));
+  } else {
   pv.camera.position.set(
     Math.sin(pv.yaw) * cy * pv.dist,
     pv.targetY + Math.sin(pv.pitch) * pv.dist,
     Math.cos(pv.yaw) * cy * pv.dist
   );
   pv.camera.lookAt(0, pv.targetY, 0);
+  }
   if (pv.sun) {
     pv.sun.position.set(Math.sin(pv.yaw + 0.9) * 30, 34, Math.cos(pv.yaw + 0.9) * 30);
     pv.sun.target.position.set(0, 1, 0);
     pv.sun.target.updateMatrixWorld();
   }
   pv.renderer.render(pv.scene, pv.camera);
+  if (dcSt.on) dcGizmoUpdate();
 }
+
+/* =====================================================================
+   29b. 贴纸系统（机库内）
+   ===================================================================== */
+/* ████████████████████████████████████████████████████████████████
+   ★★★【DECAL_CFG】贴纸参数 —— 想调整贴纸手感，只改这里 ★★★
+   ████████████████████████████████████████████████████████████████ */
+const DECAL_CFG = {
+  defaultSize: 1.0,        // 新贴纸默认宽度(米)
+  minSize: 0.05,           // 贴纸最小宽度(米)
+  maxSize: 12,             // 贴纸最大宽度(米)
+  surfaceOffset: 0.012,    // 贴纸离机体表面的距离(米)；出现闪烁/被吞就调大
+  maxPerType: 40,          // 每个机型最多贴纸数
+  fpFov: 82,               // 座舱视角 FOV
+  fpNear: 0.05,            // 座舱视角近裁剪面
+  compressChoices: [1024, 512, 256, 128],  // "压缩分辨率"可选的最长边像素
+  gizmoMinRadius: 38,      // 操作手柄圆环最小屏幕半径(px)
+  bigFileWarnMB: 12,       // 图片超过此大小时提示可压缩
+  dbName: 'heli-decals-v1' // 本机存储(IndexedDB)库名
+};
+const DECAL_STORE = {};        // 机型id -> 贴纸数组
+const DECAL_MODELS = new Set();
+const dcMat = {};              // 贴纸id -> 材质
+const dcPlane = new THREE.PlaneGeometry(1, 1);
+const dcRc = new THREE.Raycaster();
+const dcNdc = new THREE.Vector2();
+const dcSt = { on: false, sel: null, fp: false, fpYaw: 0, fpPitch: 0, saveT: 0, scr: null };
+let dcDBh = null, dcWarnedNoDB = false;
+const dcById = (id) => document.getElementById(id);
+
+function dcOpenDB() {
+  return new Promise((res) => {
+    try {
+      const rq = indexedDB.open(DECAL_CFG.dbName, 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('kv');
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => res(null);
+    } catch (e) { res(null); }
+  });
+}
+async function dcLoadAll() {
+  dcDBh = await dcOpenDB();
+  if (dcDBh) {
+    await new Promise((res) => {
+      try {
+        const rq = dcDBh.transaction('kv', 'readonly').objectStore('kv').openCursor();
+        rq.onsuccess = () => { const c = rq.result; if (c) { DECAL_STORE[c.key] = c.value; c.continue(); } else res(); };
+        rq.onerror = () => res();
+      } catch (e) { res(); }
+    });
+  }
+  for (const t in DECAL_STORE) dcRefreshType(t);
+}
+function dcSaveType(t) {
+  if (!dcDBh) {
+    if (!dcWarnedNoDB) { dcWarnedNoDB = true; toast('⚠ 浏览器不支持本地存储，贴纸关闭页面后会丢失', 3.2, true); }
+    return;
+  }
+  try { dcDBh.transaction('kv', 'readwrite').objectStore('kv').put(DECAL_STORE[t] || [], t); }
+  catch (e) { toast('⚠ 贴纸保存失败（存储空间不足？可先压缩分辨率）', 3.2, true); }
+}
+function dcSaveSoon(t) { clearTimeout(dcSt.saveT); dcSt.saveT = setTimeout(() => dcSaveType(t), 250); }
+
+function dcFrameQuat(n, rot) {
+  const y = new THREE.Vector3(0, 1, 0);
+  y.addScaledVector(n, -y.dot(n));
+  if (y.lengthSq() < 0.01) { y.set(0, 0, -1); y.addScaledVector(n, -y.dot(n)); }
+  y.normalize();
+  const x = new THREE.Vector3().crossVectors(y, n).normalize();
+  const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, n));
+  return q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rot));
+}
+function dcRelMat(m, mesh) {
+  const mr = m.mainRotor, tr = m.tailRotor;
+  const r1 = mr ? mr.rotation.y : 0, r2 = tr ? tr.rotation.x : 0;
+  if (mr) mr.rotation.y = 0;
+  if (tr) tr.rotation.x = 0;
+  const M = new THREE.Matrix4();
+  let o = mesh;
+  while (o && o !== m.group) { o.updateMatrix(); M.premultiply(o.matrix); o = o.parent; }
+  const ok = (o === m.group);
+  if (mr) { mr.rotation.y = r1; mr.updateMatrix(); }
+  if (tr) { tr.rotation.x = r2; tr.updateMatrix(); }
+  return ok ? M : null;
+}
+function dcMake(d) {
+  let mat = dcMat[d.id];
+  if (!mat) {
+    const tex = new THREE.TextureLoader().load(d.img);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    mat = new THREE.MeshLambertMaterial({
+      map: tex, transparent: true, alphaTest: 0.02, side: THREE.DoubleSide, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
+    });
+    dcMat[d.id] = mat;
+  }
+  const mesh = new THREE.Mesh(dcPlane, mat);
+  mesh.userData.dcId = d.id;
+  mesh.renderOrder = 3;
+  mesh.castShadow = false; mesh.receiveShadow = false;
+  return mesh;
+}
+function dcUnmount(m, id) {
+  const o = m._dcObjs && m._dcObjs[id];
+  if (o) { if (o.parent) o.parent.remove(o); delete m._dcObjs[id]; }
+}
+function dcMount(m, d) {
+  dcUnmount(m, d.id);
+  const mesh = m._dcMeshes && m._dcMeshes[d.mi];
+  if (!mesh) return;
+  const rel = dcRelMat(m, mesh);
+  if (!rel) return;
+  const n = new THREE.Vector3().fromArray(d.n), p = new THREE.Vector3().fromArray(d.p);
+  const G = new THREE.Matrix4().compose(p, dcFrameQuat(n, d.rot), new THREE.Vector3(d.sz, d.sz * d.h / d.w, 1));
+  const L = rel.invert().multiply(G);
+  const obj = dcMake(d);
+  L.decompose(obj.position, obj.quaternion, obj.scale);
+  mesh.add(obj);
+  (m._dcObjs || (m._dcObjs = {}))[d.id] = obj;
+}
+/* 由 createAircraft 调用：给新建的机体挂上该机型已保存的贴纸 */
+function decalApply(m, t) {
+  m._dcType = t;
+  DECAL_MODELS.add(m);
+  const arr = DECAL_STORE[t];
+  if (arr) for (const d of arr) dcMount(m, d);
+}
+function dcRefreshType(t) {
+  for (const m of [...DECAL_MODELS]) {
+    if (!m.group.parent) { DECAL_MODELS.delete(m); continue; }
+    if (m._dcType !== t) continue;
+    for (const id in (m._dcObjs || {})) dcUnmount(m, id);
+    for (const d of (DECAL_STORE[t] || [])) dcMount(m, d);
+  }
+}
+function dcCur() {
+  if (!pv.model || !dcSt.sel) return null;
+  return (DECAL_STORE[pv.typeId] || []).find(d => d.id === dcSt.sel) || null;
+}
+function dcCommit() {
+  dcSaveSoon(pv.typeId);
+  dcRefreshType(pv.typeId);
+  dcRenderUI();
+}
+
+/* ---------- 射线：把屏幕点吸附到机体表面 ---------- */
+function dcPick(cx, cy) {
+  if (!pv.model || !pv.renderer) return null;
+  const rc = pv.renderer.domElement.getBoundingClientRect();
+  dcNdc.set(((cx - rc.left) / rc.width) * 2 - 1, -((cy - rc.top) / rc.height) * 2 + 1);
+  dcRc.setFromCamera(dcNdc, pv.camera);
+  const meshes = pv.model._dcMeshes;
+  const swap = [];
+  if (dcSt.fp) {          // 座舱内：背面也参与检测，才能贴到舱内壁
+    for (const me of meshes) {
+      const ms = Array.isArray(me.material) ? me.material : [me.material];
+      for (const mt of ms) swap.push([mt, mt.side]);
+    }
+    for (const [mt] of swap) mt.side = THREE.DoubleSide;
+  }
+  let hit = null;
+  try { hit = dcRc.intersectObjects(meshes, false).find(h => h.object.visible && h.face); }
+  finally { for (const [mt, s] of swap) mt.side = s; }
+  if (!hit) return null;
+  const n = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
+  if (n.dot(dcRc.ray.direction) > 0) n.negate();
+  const inv = new THREE.Matrix4().copy(pv.model.group.matrixWorld).invert();
+  const nG = n.transformDirection(inv);
+  const pG = hit.point.clone().applyMatrix4(inv).addScaledVector(nG, DECAL_CFG.surfaceOffset);
+  return { mi: meshes.indexOf(hit.object), p: pG, n: nG, dist: hit.distance };
+}
+function dcPlace(d, hit) {
+  d.mi = hit.mi; d.p = hit.p.toArray(); d.n = hit.n.toArray();
+}
+
+/* ---------- UI ---------- */
+function dcRenderUI() {
+  const list = DECAL_STORE[pv.typeId] || [];
+  const d = dcCur();
+  const info = dcById('dc-info');
+  if (d) {
+    const nm = (d.name && d.name.length) ? d.name : ('#' + (list.indexOf(d) + 1));
+    info.textContent = nm + ' · ' + d.w + '×' + d.h + 'px · 约 ' +
+      (d.img.length * 0.75 / 1048576).toFixed(2) + ' MB · 宽 ' + d.sz.toFixed(2) + ' m';
+  } else {
+    info.textContent = '共 ' + list.length + ' 张 · 点击机体上的贴纸可选中调整，或点下方编号';
+  }
+  const chips = dcById('dc-chips');
+  chips.innerHTML = '';
+  list.forEach((x, i) => {
+    const b = document.createElement('button');
+    b.className = 'dc-chip' + (x.id === dcSt.sel ? ' on' : '');
+    b.textContent = (x.name && x.name.length) ? x.name : ('#' + (i + 1));
+    b.addEventListener('click', () => {
+      if (dcSt.sel === x.id) {
+        dcOpenRename(x);
+      } else {
+        dcSt.sel = x.id;
+        dcRenderUI();
+      }
+    });
+    chips.appendChild(b);
+  });
+  chips.style.display = list.length ? 'flex' : 'none';
+  dcById('dc-fp').textContent = dcSt.fp ? '👁 外部视角' : '👁 座舱视角';
+  dcById('dc-del').style.opacity = d ? 1 : 0.4;
+  dcById('dc-comp-btn').style.opacity = d ? 1 : 0.4;
+}
+
+/* ===== 贴纸改名浮层 ===== */
+let rnTarget = null;
+function dcOpenRename(d) {
+  if (!d) return;
+  rnTarget = d;
+  const box = document.getElementById('dc-rename');
+  const inp = document.getElementById('rn-input');
+  inp.value = d.name || '';
+  box.classList.add('show');
+  setTimeout(() => { try { inp.focus(); inp.select(); } catch (e) {} }, 30);
+}
+function dcCloseRename() {
+  document.getElementById('dc-rename').classList.remove('show');
+  rnTarget = null;
+}
+function dcApplyRename(val) {
+  if (!rnTarget) { dcCloseRename(); return; }
+  const v = (val || '').trim();
+  rnTarget.name = v.slice(0, 12);
+  dcSaveSoon(pv.typeId);
+  dcRenderUI();
+  dcCloseRename();
+}
+(function initRenameUI(){
+  const box   = document.getElementById('dc-rename');
+  const inp   = document.getElementById('rn-input');
+  const ok    = document.getElementById('rn-ok');
+  const cancel= document.getElementById('rn-cancel');
+  const clear = document.getElementById('rn-clear');
+  if (!box || !inp) return;
+  ok.addEventListener('click', () => dcApplyRename(inp.value));
+  cancel.addEventListener('click', dcCloseRename);
+  clear.addEventListener('click', () => { inp.value = ''; inp.focus(); });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); dcApplyRename(inp.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); dcCloseRename(); }
+  });
+  box.addEventListener('click', (e) => { if (e.target === box) dcCloseRename(); });
+})();
+
+function dcEnter() {
+  if (!pv.model) return;
+  dcSt.on = true; dcSt.sel = null;
+  document.getElementById('hangar').classList.add('decal-mode');
+  dcById('dc-panel').classList.add('show');
+  dcById('dc-gz').style.display = 'block';
+  dcRenderUI();
+}
+function dcSetFP(on) {
+  dcSt.fp = on;
+  dcSt.fpYaw = 0; dcSt.fpPitch = 0;
+  pv.camera.near = on ? DECAL_CFG.fpNear : 0.2;
+  pv.camera.fov = on ? DECAL_CFG.fpFov : 42;
+  pv.camera.updateProjectionMatrix();
+}
+function dcExit() {
+  if (dcSt.fp) dcSetFP(false);
+  dcSt.on = false; dcSt.sel = null;
+  document.getElementById('hangar').classList.remove('decal-mode');
+  dcById('dc-panel').classList.remove('show');
+  dcById('dc-gz').style.display = 'none';
+  clearTimeout(dcSt.saveT); if (pv.typeId) dcSaveType(pv.typeId);
+}
+function dcOnFile(ev) {
+  const f = ev.target.files && ev.target.files[0];
+  ev.target.value = '';
+  if (!f || !pv.model) return;
+  const t = pv.typeId;
+  if (!/^image\//.test(f.type)) { toast('请选择图片文件', 1.8, true); return; }
+  if ((DECAL_STORE[t] || []).length >= DECAL_CFG.maxPerType) { toast('该机型贴纸已达上限', 1.8, true); return; }
+  const fr = new FileReader();
+  fr.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const r = pv.renderer.domElement.getBoundingClientRect();
+      const tries = [[0.5, 0.5], [0.4, 0.5], [0.6, 0.5], [0.5, 0.4], [0.5, 0.6], [0.3, 0.5], [0.7, 0.5]];
+      let hit = null;
+      for (const [fx, fy] of tries) { hit = dcPick(r.left + r.width * fx, r.top + r.height * fy); if (hit) break; }
+      if (!hit) { toast('请先把视角对准机体再添加图片', 2.4, true); return; }
+      const d = {
+        id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        img: fr.result, w: img.naturalWidth, h: img.naturalHeight,
+        mi: 0, p: [0, 0, 0], n: [0, 1, 0], rot: 0, sz: DECAL_CFG.defaultSize
+      };
+      dcPlace(d, hit);
+      const list = DECAL_STORE[t] || (DECAL_STORE[t] = []);
+      list.push(d);
+      dcSt.sel = d.id;
+      dcCommit();
+      if (f.size > DECAL_CFG.bigFileWarnMB * 1048576) toast('图片较大，可点"压缩分辨率"降低体积', 3.0);
+    };
+    img.onerror = () => toast('图片读取失败', 1.8, true);
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(f);
+}
+/* ===== 贴纸镜像 =====
+   选中贴纸后，在机体左右对面生成一张镜像贴纸，并建立「联动配对」：
+     · 之后修改任意一张（拖动/旋转/缩放），另一张自动同步为镜像状态
+     · 再次点「镜像」且当前已配对的贴纸，会解除配对
+   镜像规则（以机体局部 x 轴为对称轴）：
+     p  → [-px, py, pz]        位置左右翻转
+     n  → [-nx, ny, nz]        法线左右翻转
+     rot→ -rot                 绕法线的朝向也翻转 */
+function dcMirrorOf(d) {
+  const p = d.p || [0, 0, 0];
+  const n = d.n || [0, 1, 0];
+  return {
+    mi: d.mi,
+    p: [-p[0], p[1], p[2]],
+    n: [-n[0], n[1], n[2]],
+    rot: -d.rot,
+    sz: d.sz
+  };
+}
+function dcMirror() {
+  const d = dcCur();
+  if (!d) { toast('请先选中一张贴纸', 1.6, true); return; }
+  const t = pv.typeId;
+  const list = DECAL_STORE[t] || (DECAL_STORE[t] = []);
+
+  // 已配对 → 解除配对（只断开关系，两张贴纸都保留）
+  if (d.mirrorPair) {
+    const other = list.find(x => x.id === d.mirrorPair);
+    if (other) { other.mirrorPair = null; }
+    d.mirrorPair = null;
+    dcCommit();
+    toast('已解除镜像联动', 1.6);
+    return;
+  }
+
+  if (list.length >= DECAL_CFG.maxPerType) { toast('该机型贴纸已达上限', 1.8, true); return; }
+
+  const m = dcMirrorOf(d);
+  const nd = {
+    id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    img: d.img, w: d.w, h: d.h,
+    mi: m.mi, p: m.p, n: m.n, rot: m.rot, sz: m.sz,
+    mirrorPair: d.id
+  };
+  d.mirrorPair = nd.id;
+  list.push(nd);
+  dcSt.sel = nd.id;
+  dcCommit();
+  toast('已镜像到对面（联动）', 1.6);
+}
+/* 把 d 的镜像状态同步给它的配对贴纸 */
+function dcSyncMirror(d) {
+  if (!d.mirrorPair) return;
+  const list = DECAL_STORE[pv.typeId];
+  if (!list) return;
+  const other = list.find(x => x.id === d.mirrorPair);
+  if (!other) { d.mirrorPair = null; return; }
+  const m = dcMirrorOf(d);
+  other.mi = m.mi; other.p = m.p; other.n = m.n; other.rot = m.rot; other.sz = m.sz;
+  // 配对的那张，重新挂载
+  if (pv.model) dcMount(pv.model, other);
+}
+function dcDelete() {
+  const d = dcCur(); if (!d) return;
+  const list = DECAL_STORE[pv.typeId];
+  // 解除与配对贴纸的联动（配对方保留，只是不再跟着变）
+  if (d.mirrorPair) {
+    const other = list.find(x => x.id === d.mirrorPair);
+    if (other) other.mirrorPair = null;
+  }
+  // 如果自己是别人的配对目标，也要清掉对方的引用
+  for (const x of list) { if (x.mirrorPair === d.id) x.mirrorPair = null; }
+  list.splice(list.indexOf(d), 1);
+  if (dcMat[d.id]) { if (dcMat[d.id].map) dcMat[d.id].map.dispose(); dcMat[d.id].dispose(); delete dcMat[d.id]; }
+  dcSt.sel = null;
+  dcCommit();
+}
+function dcCompress() {
+  const d = dcCur(); if (!d) { toast('请先选中一张贴纸', 1.6); return; }
+  const maxSide = parseInt(dcById('dc-comp').value, 10);
+  if (Math.max(d.w, d.h) <= maxSide) { toast('已经不大于 ' + maxSide + 'px', 1.6); return; }
+  const img = new Image();
+  img.onload = () => {
+    const k = maxSide / Math.max(d.w, d.h);
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(d.w * k)); cv.height = Math.max(1, Math.round(d.h * k));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    d.img = cv.toDataURL('image/webp', 0.9);
+    d.w = cv.width; d.h = cv.height;
+    if (dcMat[d.id]) { if (dcMat[d.id].map) dcMat[d.id].map.dispose(); dcMat[d.id].dispose(); delete dcMat[d.id]; }
+    dcCommit();
+    toast('已压缩到 ' + d.w + '×' + d.h, 1.8);
+  };
+  img.src = d.img;
+}
+
+/* ---------- 操作手柄（黄=旋转 / 绿=移动 / 蓝=缩放）---------- */
+function dcScr(v, rc) {
+  const p = v.clone().project(pv.camera);
+  return { x: (p.x * 0.5 + 0.5) * rc.width, y: (-p.y * 0.5 + 0.5) * rc.height, z: p.z };
+}
+function dcGizmoUpdate() {
+  const gz = dcById('dc-gz');
+  const d = dcCur();
+  const obj = d && pv.model._dcObjs && pv.model._dcObjs[d.id];
+  if (!obj) { gz.firstChild.style.display = 'none'; ['mv', 'rt', 'sc'].forEach(k => dcEl[k].style.display = 'none'); dcSt.scr = null; return; }
+  const rc = pv.renderer.domElement.getBoundingClientRect();
+  obj.updateWorldMatrix(true, false);
+  const e = obj.matrixWorld.elements;
+  const xW = new THREE.Vector3(e[0], e[1], e[2]).normalize();
+  const yW = new THREE.Vector3(e[4], e[5], e[6]).normalize();
+  const zW = new THREE.Vector3(e[8], e[9], e[10]).normalize();
+  const c = new THREE.Vector3(e[12], e[13], e[14]);
+  const hw = d.sz / 2, hh = d.sz * d.h / d.w / 2;
+  const sc0 = dcScr(c, rc);
+  if (sc0.z > 1) { gz.firstChild.style.display = 'none'; ['mv', 'rt', 'sc'].forEach(k => dcEl[k].style.display = 'none'); dcSt.scr = null; return; }
+  const top = dcScr(c.clone().addScaledVector(yW, hh), rc);
+  const cor = dcScr(c.clone().addScaledVector(xW, hw).addScaledVector(yW, -hh), rc);
+  const R = Math.max(DECAL_CFG.gizmoMinRadius, Math.hypot(cor.x - sc0.x, cor.y - sc0.y) + 6);
+  const dir = (p) => { let dx = p.x - sc0.x, dy = p.y - sc0.y; const l = Math.hypot(dx, dy); return l < 1 ? { x: 0, y: -1 } : { x: dx / l, y: dy / l }; };
+  const dT = dir(top), dC = dir(cor);
+  const ring = gz.firstChild;
+  ring.style.display = 'block';
+  ring.style.width = ring.style.height = (R * 2) + 'px';
+  ring.style.left = (sc0.x - R) + 'px'; ring.style.top = (sc0.y - R) + 'px';
+  const put = (el, x, y) => { el.style.display = 'flex'; el.style.left = x + 'px'; el.style.top = y + 'px'; };
+  put(dcEl.mv, sc0.x, sc0.y);
+  put(dcEl.rt, sc0.x + dT.x * R, sc0.y + dT.y * R);
+  put(dcEl.sc, sc0.x + dC.x * R, sc0.y + dC.y * R);
+  const toCam = pv.camera.position.clone().sub(c);
+  dcSt.scr = { cx: sc0.x, cy: sc0.y, R, facing: zW.dot(toCam) > 0, rc };
+}
+const dcEl = {};
+function dcKnob(cls, txt, onStart, onMove) {
+  const el = document.createElement('div');
+  el.className = 'gz-k ' + cls; el.textContent = txt;
+  let ctx = null;
+  el.addEventListener('pointerdown', (e) => {
+    const d = dcCur(); if (!d || !dcSt.scr) return;
+    e.preventDefault(); e.stopPropagation();
+    try { el.setPointerCapture(e.pointerId); } catch (x) {}
+    const rc = dcSt.scr.rc;
+    ctx = onStart(d, e.clientX - rc.left, e.clientY - rc.top);
+  });
+ el.addEventListener('pointermove', (e) => {
+    if (!ctx) return;
+    const d = dcCur(); if (!d || !dcSt.scr) return;
+    const rc = pv.renderer.domElement.getBoundingClientRect();
+    onMove(d, ctx, e.clientX - rc.left, e.clientY - rc.top, e);
+    dcMount(pv.model, d);
+    dcSyncMirror(d);
+  });
+  const end = () => { if (ctx) { ctx = null; dcCommit(); } };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  return el;
+}
+function dcWrap(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
+function dcInitUI() {
+  const sel = dcById('dc-comp');
+  for (const s of DECAL_CFG.compressChoices) {
+    const o = document.createElement('option'); o.value = s; o.textContent = '最长边 ' + s + 'px'; sel.appendChild(o);
+  }
+  sel.value = DECAL_CFG.compressChoices[1] || DECAL_CFG.compressChoices[0];
+  dcById('btn-decal').addEventListener('click', dcEnter);
+  dcById('dc-done').addEventListener('click', dcExit);
+dcById('dc-add').addEventListener('click', () => dcById('dc-file').click());
+dcById('dc-file').addEventListener('change', dcOnFile);
+dcById('dc-fp').addEventListener('click', () => { if (pv.model) { dcSetFP(!dcSt.fp); dcRenderUI(); } });
+dcById('dc-mirror').addEventListener('click', dcMirror);
+dcById('dc-del').addEventListener('click', dcDelete);
+dcById('dc-comp-btn').addEventListener('click', dcCompress);
+
+  const gz = document.createElement('div');
+  gz.id = 'dc-gz';
+  const ring = document.createElement('div'); ring.className = 'gz-ring'; gz.appendChild(ring);
+  // 移动：鼠标/手指下的机体表面点 → 贴纸吸附过去
+  dcEl.mv = dcKnob('gz-mv', '✥', () => ({}), (d, ctx, px, py, e) => {
+    const hit = dcPick(e.clientX, e.clientY);
+    if (hit) dcPlace(d, hit);
+  });
+  // 旋转：绕表面法线
+  dcEl.rt = dcKnob('gz-rt', '⟳', (d, px, py) => {
+    const s = dcSt.scr; return { last: Math.atan2(py - s.cy, px - s.cx) };
+  }, (d, ctx, px, py) => {
+    const s = dcSt.scr;
+    const a = Math.atan2(py - s.cy, px - s.cx);
+    const dl = dcWrap(a - ctx.last); ctx.last = a;
+    d.rot += s.facing ? -dl : dl;
+  });
+  // 缩放：按手指到中心的距离比例
+  dcEl.sc = dcKnob('gz-sc', '⤡', (d, px, py) => {
+    const s = dcSt.scr; return { d0: Math.max(10, Math.hypot(px - s.cx, py - s.cy)), sz0: d.sz };
+  }, (d, ctx, px, py) => {
+    const s = dcSt.scr;
+    const f = Math.hypot(px - s.cx, py - s.cy) / ctx.d0;
+    d.sz = clamp(ctx.sz0 * f, DECAL_CFG.minSize, DECAL_CFG.maxSize);
+  });
+  gz.appendChild(dcEl.mv); gz.appendChild(dcEl.rt); gz.appendChild(dcEl.sc);
+  document.querySelector('.hg-view').appendChild(gz);
+
+  // 画布：点击选中贴纸 / 座舱视角拖动转头
+  const cv = dcById('pv-canvas');
+  const ptrs = new Map();
+  let tap = null;
+  cv.addEventListener('pointerdown', (e) => {
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    tap = ptrs.size === 1 ? { x: e.clientX, y: e.clientY, moved: false } : null;
+  });
+  cv.addEventListener('pointermove', (e) => {
+    const p = ptrs.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8) tap.moved = true;
+    if (dcSt.on && dcSt.fp && ptrs.size === 1) {
+      dcSt.fpYaw = clamp(dcSt.fpYaw + dx * 0.006, -Math.PI, Math.PI);
+      dcSt.fpPitch = clamp(dcSt.fpPitch + dy * 0.006, -1.3, 1.3);
+    }
+  });
+  const up = (e) => {
+    ptrs.delete(e.pointerId);
+    if (tap && !tap.moved && dcSt.on && ptrs.size === 0) dcTapAt(e.clientX, e.clientY);
+    tap = null;
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', (e) => { ptrs.delete(e.pointerId); tap = null; });
+}
+function dcTapAt(cx, cy) {
+  if (!pv.model || !pv.renderer) return;
+  const objs = Object.values(pv.model._dcObjs || {});
+  let pick = null;
+  if (objs.length) {
+    const rc = pv.renderer.domElement.getBoundingClientRect();
+    dcNdc.set(((cx - rc.left) / rc.width) * 2 - 1, -((cy - rc.top) / rc.height) * 2 + 1);
+    dcRc.setFromCamera(dcNdc, pv.camera);
+    const hs = dcRc.intersectObjects(objs, false);
+    if (hs.length) {
+      const body = dcPick(cx, cy);   // 被机体挡住(在背面)的贴纸不选
+      if (!body || hs[0].distance <= body.dist + DECAL_CFG.surfaceOffset * 4) pick = hs[0].object.userData.dcId;
+    }
+  }
+  dcSt.sel = pick;
+  dcRenderUI();
+}
+dcInitUI();
+dcLoadAll();
 
 /* =====================================================================
    30. 机型切换 & 机库 UI
@@ -5589,6 +6348,7 @@ function openHangar() {
   pv.w = 0; pv.h = 0; pv.idle = 0;
 }
 function closeHangar() {
+  if (dcSt.on) dcExit();
   hangarOpen = false;
   document.getElementById('hangar').classList.remove('show');
   if (!inMenu) {
@@ -6267,7 +7027,7 @@ function stepNPC(c, dt, t) {
   updateCockpitControls();
   exitCraft(c, s);
   if (c.rotorCool > 0) c.rotorCool -= dt;
-  if (c.S.hullDamage > 2.0 && !c.S.shattered) {
+  if (c.S.hullDamage >= DMG_CFG.cumExplodeAt && !c.S.shattered) {
     const s2 = enterCraft(c); shatterBody(); exitCraft(c, s2);
   }
 }
@@ -6376,6 +7136,7 @@ function resetNPCs() {
     restoreParts();
     exitCraft(c, s);
     c.S.hullDamage = 0; c.S.rotorDamage = 0; c.S.crashed = false; c.S.crashTimer = 0;
+    c.S.fire = 0; c.S.fireT = 0; c.S.fireCool = 0; c.S.cumFireRolled = 0;
     c.S.vel.set(0, 0, 0); c.S.avel.set(0, 0, 0);
     c.S.quat.identity();
     c.S.pos.set(c.ai.home.x, c.ai.home.y, c.ai.home.z);
@@ -6474,14 +7235,15 @@ function breakBladeTowards(c, lx, lz) {
 }
 function angleOf(c) { return c.isPlayer ? rotorAngle : c.S.rotorAngle; }
 function addDmg(c, v, byP) {
-  if (c.isPlayer) { hullDamage += v; return; }
+  if (c.isPlayer) { hullDamage += v; dmgRollFire(H, hullDamage, true, v); return; }
   c.S.hullDamage += v;
+  dmgRollFire(c.S, c.S.hullDamage, false, v);
   const h = c._dmgH || (c._dmgH = []); h.push(!!byP); if (h.length > 2) h.shift();
 }
 function checkShatter(c) {
   if (isShatteredOf(c)) return;
-  if (c.isPlayer) { if (hullDamage > 2.0) shatterBody(); return; }
-  if (c.S.hullDamage <= 2.0) return;
+  if (c.isPlayer) { if (hullDamage >= DMG_CFG.cumExplodeAt) shatterBody(); return; }
+  if (c.S.hullDamage < DMG_CFG.cumExplodeAt) return;
   const s = enterCraft(c); shatterBody(); exitCraft(c, s);
 }
 
@@ -7307,10 +8069,16 @@ function openMapSelect(purpose) {
   mapSelectPurpose = purpose || 'start';
   const ms = document.getElementById('mapselect');
   if (ms) ms.classList.add('show');
+  if (!inMenu) {
+    fadeInBGM(0.45, 1.2);
+  }
 }
 function closeMapSelect() {
   const ms = document.getElementById('mapselect');
   if (ms) ms.classList.remove('show');
+  if (!inMenu) {
+    fadeOutBGM(0.5);
+  }
 }
 const _reselectBtn = document.getElementById('btn-reselect-map');
 if (_reselectBtn) _reselectBtn.addEventListener('click', () => {
