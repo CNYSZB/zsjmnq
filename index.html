@@ -625,7 +625,7 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <button id="btn-credits" class="ghost">制 作 人 员</button>
   </div>
 </div>
-  <div class="corner">v1.0.0</div>
+  <div class="corner">v1.1.4</div>
 </div>
 
 <div id="mapselect">
@@ -3765,7 +3765,7 @@ for (const s of [-1, 1]) {
 const AIRCRAFT = {
   y206: {
     id: 'y206', name: '银翼206', en: 'SILVER WING 206',
-    tag: '通用轻型', desc: '经典双桨叶轻型直升机，操控轻快，适合观光与训练。军用改型曾在亚洲某地区服役 39 架。',
+    tag: '通用轻型', desc: '经典双桨叶轻型直升机，操控轻快，适合观光与训练。军用改型曾在亚洲某地区服役过几架。',
     stat: '最大起飞重量 1.2 t · 主旋翼 2 片',
     mass: 1200, maxThrust: 27000, skidH: 1.30, inertiaK: 1.25,
     drag: { x: 4.2, y: 14.0, z: 1.55 },
@@ -4756,13 +4756,14 @@ if (hullDamage > 0.5) {
 
 /* ===== 成就系统 ===== */
 const ACH_LIST = [
-  { id: 'view',   n: '俯瞰',       d: '将直升机飞至3千米高' },
-  { id: 'pvp',    n: 'PVP大佬',    d: '你造成的伤害导致一架NPC或玩家直升机坠毁' },
-  { id: 'swim',   n: '游泳高手',   d: '在水里坠毁' },
-  { id: 'crash',  n: '直升机高手', d: '以任意方式坠毁' },
-  { id: 'tree',   n: '伐木工',     d: '撞倒一棵树木' },
-  { id: 'wanted', n: '通缉',       d: '被追击模式的407或407M直升机追击' },
-  { id: 'expert', n: '游戏专家',   d: '完成所有其他成就' }
+  { id: 'view',   n: '这给我干哪来了',       d: '我觉得我得飞低点' },
+  { id: 'pvp',    n: 'man!',    d: '吃我一击吧！' },
+  { id: 'swim',   n: '游泳健将',   d: '来泡个澡而已' },
+  { id: 'crash',  n: '专业飞行员', d: '相信我的实力，我们应该能活着回来的…对，肯定可以' },
+  { id: 'tree',   n: '伐木工',     d: '冬眠假期刚刚结束，我还有点小糊涂～' },
+  { id: 'wanted', n: '通缉',       d: '兄弟，你犯啥事了' },
+  { id: 'pilot',  n: '飞行执照', d: '合格！' },
+  { id: 'expert', n: '完美主义者',   d: '轻轻松松拿下拿下' }
 ];
 const ACH_KEY = 'heli_ach_v1';
 let achDone = {};
@@ -6293,6 +6294,7 @@ function updateHangarUI() {
   if (!list) return;
   list.querySelectorAll('.hg-card').forEach(card => {
     card.classList.toggle('on', card.dataset.id === aircraftId);
+    card.classList.toggle('ms-locked', !!(window.__MS && window.__MS.isLocked(card.dataset.id)));
   });
 }
 function buildHangarList() {
@@ -6308,6 +6310,7 @@ function buildHangarList() {
       '<div class="ds">' + def.desc + '</div>' +
       '<div class="st">' + def.stat + '</div>';
     b.addEventListener('click', () => {
+      if (window.__MS && window.__MS.isLocked(id)) { window.__MS.askGo(); return; }
       if (id === aircraftId) { toast('当前正在使用 ' + def.name, 1.4); return; }
       setAircraft(id);
     });
@@ -8012,6 +8015,7 @@ if (_pm('pm-npcclear')) _pm('pm-npcclear').addEventListener('click', () => {
 });
 
 function backToMainMenu() {
+  if (window.__MS) window.__MS.cleanup();
   closeHangar();
   clearNPCs();
   resetHeli();
@@ -8092,6 +8096,8 @@ document.querySelectorAll('.ms-card').forEach(card => {
     closeMapSelect();
     if (mapSelectPurpose === 'start') {
       startRound();
+    } else if (mapSelectPurpose === 'mission') {
+      window.__MS.launch(window.__MS.pending);
     }
   });
 });
@@ -8099,12 +8105,7 @@ if (window.__HELI) {
   window.__HELI.onStart = async () => {
     initAudio();
     if (audio && audio.ctx.state === 'suspended') { try { await audio.ctx.resume(); } catch (e) {} }
-    enterGame();
-    if (!mapChosen) {
-      openMapSelect('start');
-    } else {
-      startRound();
-    }
+    window.__MS.showModeSelect();
   };
   window.__HELI.onHangar = () => openHangar();
   window.__HELI.onCloseHangar = () => closeHangar();
@@ -8437,7 +8438,7 @@ function loop(now) {
     stepTreeFall(STEP);
     simTime += STEP; acc -= STEP; iter++;
   }
-  achTick(); bgmGuard();
+  achTick(); bgmGuard(); if (window.__MS) window.__MS.tick(dt);
   if (iter >= 8) acc = 0;
   stepAllDebris(dt);
 mpSyncRemoteModel();
@@ -9248,6 +9249,368 @@ mpRenderRoot();
 mpBindButtons();
 mpUpdatePlayers();
 if (window.__HELI) window.__HELI.ready();
+/* =====================================================================
+   任务系统 MS（沙盒 / 任务 两种模式）
+   ===================================================================== */
+const MS_CFG = {
+  SAVE_KEY: 'heli2026_missions',
+  CLIMB_ALT: 500,        // 爬升目标：高出停机坪的米数
+  RING_R: 35,            // 绿环半径(米)
+  RING_TUBE: 2.6,        // 环的粗细
+  // 绿环路线 [x, z, 高出停机坪的高度]，按顺序穿过
+  RING_PTS: [[0,-350,540],[300,-700,560],[750,-800,520],[1000,-400,500],[800,50,540],[350,200,520]],
+  BASE_WX: 'clear',      // 非天气类任务的固定天气
+  WX_TIME: 180,          // 天气挑战：需在空中不坠毁的秒数
+  SURVIVE_TIME: 60,      // 对抗：被追击后需存活的秒数
+  NPC_DIST: 450,         // 对抗：NPC 初始距离(米)
+  EXTREME_ALT: 1000,     // 极限挑战：出生高度(米)
+  EXTREME_WIND_SPD: 30,  // 极限挑战风速（= 设置里风力滑条最大值）
+  EXTREME_WIND_DIR: 180, // 风向盘角度：0=北 180=南（箭头指向风吹去的方向）；想反向就改成 0
+  LAND_HOLD: 3,          // 极限挑战：落地后需保持不着火不坠毁的秒数
+  WORST_WX: { hill: 'storm', snow: 'blizzard', desert: 'sandstorm' } // 各地形最恶劣天气
+};
+const MISSIONS = {
+  m1: { id:'m1', name:'基础飞行', icon:'🛫', kind:'rings', craft:'y206', pre:[], x:11, y:50,
+        desc:'起飞并爬升到 500 米，然后按顺序穿过场景中的绿色环，有点耗时，但很简单的，真的', reward:'解锁「进阶飞行」' },
+  m2: { id:'m2', name:'进阶飞行', icon:'🎯', kind:'rings', craft:'y206', pre:['m1'], noAssist:true, x:31, y:50,
+        desc:'在基础飞行之上，电传辅助被强制关闭。完成的方式一模一样，有点小难', reward:'解锁「天气挑战」「对抗」' },
+  m3: { id:'m3', name:'天气挑战', icon:'⛈', kind:'weather', craft:'y206', pre:['m2'], noAssist:true, wx:'worst', x:57, y:24,
+        desc:'天气被强制调整为当前地形最恶劣的天气！在空中飞行 3 分钟不坠毁就通过了', reward:'获得银翼407的驾驶资格' },
+  m4: { id:'m4', name:'对抗', icon:'⚔', kind:'duel', craft:'y407', pre:['m2'], x:57, y:76,
+        desc:'你和追击 NPC 都驾驶银翼407，你可以选择击毁它或者选择逃跑存活60秒', reward:'获得银翼407M的驾驶资格' },
+  m5: { id:'m5', name:'极限挑战', icon:'☠', kind:'extreme', craft:'y407M', pre:['m3','m4'], noAssist:true, wx:'worst', wind:true, spawnHigh:true, x:84, y:50,
+        desc:'最恶劣天气 + 向南最大风速，电传辅助关闭，机型锁定银翼407M。从停机坪上空 1 千米处出发，降落且不着火，这其实小心点的话也不难嘛，就是飞机有点重', reward:'解锁所有玩法设置！' }
+};
+const MS_EDGES = [['m1','m2'],['m2','m3'],['m2','m4'],['m3','m5'],['m4','m5']];
+const MS_LOCK_CTRL = '#wxSeg,#windDial,#windSl,#wxAutoWind,#btn-reselect-map,.tgl[data-key="airDensity"]';
+
+const MS = window.__MS = {
+  mode: 'sandbox', active: null, st: null, saved: null, pending: null, sel: 'm1', from: 'mode', done: {}
+};
+try { MS.done = (JSON.parse(localStorage.getItem(MS_CFG.SAVE_KEY) || '{}') || {}).done || {}; } catch (e) { MS.done = {}; }
+MS.save = () => { try { localStorage.setItem(MS_CFG.SAVE_KEY, JSON.stringify({ done: MS.done })); } catch (e) {} };
+MS.avail = id => MISSIONS[id].pre.every(p => MS.done[p]);
+MS.isLocked = aid => (aid === 'y407' && !MS.done.m3) || (aid === 'y407M' && !MS.done.m4);
+MS.inMission = () => MS.mode === 'mission' && !!MS.active;
+
+/* ---------- 样式 + DOM ---------- */
+(function buildMsDom() {
+  const css = document.createElement('style');
+  css.textContent = `
+  .ms-ov{position:fixed;inset:0;display:none;z-index:300;align-items:center;justify-content:center;flex-direction:column;
+    background:rgba(4,10,18,.88);color:#eafaff;font-family:inherit;}
+  .ms-ov.show{display:flex;}
+  .ms-big{width:min(300px,38vw);padding:26px 0;margin:0 8px;font-family:inherit;font-size:22px;letter-spacing:4px;color:#eafaff;cursor:pointer;
+    background:rgba(20,60,80,.55);border:1px solid rgba(100,190,220,.45);border-left:5px solid rgba(120,220,255,.9);border-radius:2px;}
+  .ms-big span{display:block;font-size:11px;letter-spacing:1px;color:#8fb3c7;margin-top:8px;}
+  .ms-big:active{background:rgba(35,90,110,.7);}
+  .ms-small{padding:9px 18px;font-family:inherit;font-size:13px;letter-spacing:2px;color:#eafaff;cursor:pointer;
+    background:rgba(50,140,175,.35);border:1px solid rgba(100,190,220,.45);border-radius:2px;margin:4px;}
+  .ms-small[disabled]{opacity:.4;pointer-events:none;}
+  #ms-page{justify-content:flex-start;padding:10px 14px;box-sizing:border-box;}
+  .msp-top{width:100%;display:flex;justify-content:space-between;align-items:center;font-size:20px;letter-spacing:6px;}
+  #ms-map{position:relative;flex:1;width:100%;min-height:0;}
+  #ms-map svg{position:absolute;inset:0;width:100%;height:100%;}
+  #ms-map line{stroke:#445560;stroke-width:3;vector-effect:non-scaling-stroke;}
+  #ms-map line.on{stroke:#4cff9a;}
+  .ms-node{position:absolute;transform:translate(-50%,-50%);width:74px;text-align:center;cursor:pointer;font-size:11px;letter-spacing:1px;}
+  .ms-node i{display:flex;align-items:center;justify-content:center;width:58px;height:58px;margin:0 auto 4px;border-radius:50%;
+    font-style:normal;font-size:26px;background:rgba(20,60,80,.9);border:3px solid #6fd8ff;box-sizing:border-box;}
+  .ms-node.lk i{filter:grayscale(1);border-color:#555e66;background:#262d33;opacity:.75;}
+  .ms-node.lk{color:#7d8a93;}
+  .ms-node.done i{border-color:#4cff9a;box-shadow:0 0 12px rgba(76,255,154,.6);}
+  .ms-node.sel i{outline:2px solid #fff;outline-offset:3px;}
+  .msp-info{width:100%;min-height:96px;padding:8px 6px 4px;box-sizing:border-box;border-top:1px solid rgba(100,190,220,.3);
+    display:flex;align-items:center;gap:12px;font-size:12px;line-height:1.7;}
+  .msp-info>div{flex:1;min-width:0;}
+  .msp-info b{font-size:15px;letter-spacing:3px;}
+  #ms-conf .box,#ms-res .box{max-width:min(420px,80vw);padding:20px 24px;text-align:center;background:rgba(10,30,44,.95);
+    border:1px solid rgba(100,190,220,.45);border-radius:3px;font-size:14px;line-height:1.8;}
+  #ms-conf,#ms-res{z-index:320;}
+  #ms-hud{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:60;display:none;padding:6px 14px;font-size:13px;
+    color:#eafaff;background:rgba(8,24,36,.7);border:1px solid rgba(100,190,220,.4);border-radius:2px;pointer-events:none;white-space:nowrap;}
+  #ms-pm{display:none;}
+  body.ms-mission #ms-pm{display:block;}
+  body.ms-mission #pm-hangar,body.ms-mission #pm-mp{display:none !important;}
+  body.ms-mission #ms-hud{display:block;}
+  body.ms-lock-gp ${MS_LOCK_CTRL.split(',').join(',body.ms-lock-gp ')},
+  body.ms-mission ${MS_LOCK_CTRL.split(',').join(',body.ms-mission ')}{pointer-events:none;opacity:.35;}
+  body.ms-lock-gp #btn-decal,body.ms-lock-gp #pm-assist,body.ms-lock-gp [data-npc],body.ms-lock-gp #pm-npcclear,
+  body.ms-mission [data-npc],body.ms-mission #pm-npcclear,body.ms-lock-assist #pm-assist{opacity:.4;}
+  .hg-card{position:relative;}
+  .hg-card.ms-locked{filter:grayscale(1);opacity:.55;}
+  .hg-card.ms-locked::after{content:'🔒';position:absolute;right:8px;top:6px;font-size:16px;}
+  `;
+  document.head.appendChild(css);
+  document.body.insertAdjacentHTML('beforeend', `
+  <div id="ms-mode" class="ms-ov">
+    <div style="font-size:22px;letter-spacing:8px;margin-bottom:6px;">选 择 模 式</div>
+    <div style="font-size:11px;color:#8fb3c7;margin-bottom:18px;">任务可解锁沙盒中的机型与玩法设置</div>
+    <div style="display:flex;"><button class="ms-big" id="msm-sand">沙 盒<span>自由飞行 · 机型与设置按解锁进度开放</span></button>
+    <button class="ms-big" id="msm-mis">任 务<span>完成任务，解锁机型与功能</span></button></div>
+    <button class="ms-small" id="msm-back" style="margin-top:18px;">返 回</button>
+  </div>
+  <div id="ms-page" class="ms-ov">
+    <div class="msp-top"><span>任 务</span><button class="ms-small" id="msp-back">返 回</button></div>
+    <div id="ms-map"></div>
+    <div class="msp-info"><div><b id="msp-name"></b><br><span id="msp-desc"></span><br><span id="msp-rw" style="color:#7fe9a8;"></span></div>
+    <button class="ms-small" id="msp-go">开始任务</button></div>
+  </div>
+  <div id="ms-conf" class="ms-ov"><div class="box"><div id="msc-t">该机型尚未解锁，是否前往任务页面？</div>
+    <div style="margin-top:14px;"><button class="ms-small" id="msc-yes">前往任务</button><button class="ms-small" id="msc-no">取消</button></div></div></div>
+  <div id="ms-res" class="ms-ov"><div class="box"><div id="msr-t" style="font-size:20px;letter-spacing:5px;"></div>
+    <div id="msr-m" style="margin:8px 0;"></div><div id="msr-r" style="color:#7fe9a8;"></div>
+    <div style="margin-top:14px;"><button class="ms-small" id="msr-retry">重新挑战</button><button class="ms-small" id="msr-list">任务页面</button></div></div></div>
+  <div id="ms-hud"></div>`);
+  const pm = document.querySelector('#pause .pm-sec');
+  if (pm) {
+    const d = document.createElement('div');
+    d.id = 'ms-pm';
+    d.innerHTML = '<div class="pm-sec">任 务</div><div class="pm-grid"><button class="pm-btn" id="ms-retry">重试任务</button><button class="pm-btn warn" id="ms-quit">放弃任务</button></div>';
+    pm.parentNode.insertBefore(d, pm);
+  }
+})();
+const $ms = id => document.getElementById(id);
+const msShow = (id, on) => $ms(id).classList.toggle('show', !!on);
+
+MS.applyBody = function () {
+  const b = document.body.classList, mis = MS.inMission();
+  b.toggle('ms-mission', mis);
+  b.toggle('ms-lock-gp', !mis && !MS.done.m5);
+  b.toggle('ms-lock-assist', mis && !!MISSIONS[MS.active].noAssist);
+};
+MS.applyBody();
+
+/* 被锁定的功能：点击时给提示（捕获阶段，先于原有处理） */
+document.addEventListener('click', e => {
+  const t = e.target; if (!t || !t.closest) return;
+  const b = document.body.classList, gp = b.contains('ms-lock-gp'), mis = b.contains('ms-mission');
+  let hit = false;
+  if ((gp || mis) && t.closest('[data-npc],#pm-npcclear')) hit = true;
+  else if ((gp || b.contains('ms-lock-assist')) && t.closest('#pm-assist')) hit = true;
+  else if (gp && t.closest('#btn-decal')) hit = true;
+  if (hit) { e.stopImmediatePropagation(); e.preventDefault(); toast(mis ? '任务中已锁定' : '完成「极限挑战」后解锁', 1.8, true); return; }
+  const opt = t.closest('.opt');
+  if ((gp || mis) && opt && opt.querySelector(MS_LOCK_CTRL)) toast(mis ? '任务中已锁定' : '完成「极限挑战」后解锁', 1.8, true);
+}, true);
+
+/* ---------- 模式选择 / 任务页面 ---------- */
+MS.checkAch = () => { if (Object.keys(MISSIONS).every(k => MS.done[k])) achUnlock('pilot'); };
+MS.checkAch();
+MS.showModeSelect = () => { MS.checkAch(); msShow('ms-mode', true); };
+$ms('msm-back').onclick = () => msShow('ms-mode', false);
+$ms('msm-sand').onclick = () => {
+  msShow('ms-mode', false);
+  MS.mode = 'sandbox'; MS.active = null; MS.applyBody();
+  if (MS.isLocked(aircraftId)) setAircraft('y206');
+  enterGame();
+  if (!mapChosen) openMapSelect('start'); else startRound();
+};
+$ms('msm-mis').onclick = () => { msShow('ms-mode', false); MS.openPage('mode'); };
+
+MS.openPage = function (from) {
+  MS.from = from || 'mode';
+  if (!MS.avail(MS.sel) && !MS.done[MS.sel]) MS.sel = 'm1';
+  MS.renderPage(); msShow('ms-page', true);
+};
+MS.renderPage = function () {
+  const map = $ms('ms-map');
+  const P = id => MISSIONS[id];
+  const lines = MS_EDGES.map(([a, b]) => '<line x1="' + P(a).x + '" y1="' + P(a).y + '" x2="' + P(b).x + '" y2="' + P(b).y + '" class="' + (MS.done[a] ? 'on' : '') + '"/>').join('');
+  let h = '<svg viewBox="0 0 100 100" preserveAspectRatio="none">' + lines + '</svg>';
+  for (const id in MISSIONS) {
+    const m = MISSIONS[id], st = MS.done[id] ? 'done' : (MS.avail(id) ? 'av' : 'lk');
+    h += '<div class="ms-node ' + st + (MS.sel === id ? ' sel' : '') + '" data-id="' + id + '" style="left:' + m.x + '%;top:' + m.y + '%"><i>' + (st === 'lk' ? '🔒' : m.icon) + '</i>' + m.name + (MS.done[id] ? ' ✓' : '') + '</div>';
+  }
+  map.innerHTML = h;
+  map.querySelectorAll('.ms-node').forEach(n => n.onclick = () => { MS.sel = n.dataset.id; MS.renderPage(); });
+  const m = MISSIONS[MS.sel], ok = MS.avail(MS.sel);
+  $ms('msp-name').textContent = m.name + (MS.done[m.id] ? '（已完成）' : '');
+  $ms('msp-desc').textContent = m.desc;
+  $ms('msp-rw').textContent = '奖励：' + m.reward;
+  const go = $ms('msp-go');
+  go.disabled = !ok;
+  go.textContent = ok ? (MS.done[m.id] ? '再次挑战' : '开始任务') : '需先完成：' + m.pre.filter(p => !MS.done[p]).map(p => MISSIONS[p].name).join('、');
+};
+$ms('msp-back').onclick = () => { msShow('ms-page', false); if (MS.from === 'mode') MS.showModeSelect(); };
+$ms('msp-go').onclick = () => {
+  if (!MS.avail(MS.sel)) return;
+  msShow('ms-page', false);
+  MS.pending = MS.sel;
+  openMapSelect('mission');
+};
+
+/* 点击未解锁机型 */
+MS.askGo = () => msShow('ms-conf', true);
+$ms('msc-no').onclick = () => msShow('ms-conf', false);
+$ms('msc-yes').onclick = () => { msShow('ms-conf', false); MS.openPage('hangar'); };
+
+/* ---------- 环境（天气/风）---------- */
+MS.applyEnv = function (m) {
+  if (!MS.saved) MS.saved = { wxType: settings.wxType, windSpd: settings.windSpd, windDir: settings.windDir, wxAutoWind: settings.wxAutoWind };
+  const terr = settings.terrainStyle || 'hill';
+  const wx = m.wx === 'worst' ? (MS_CFG.WORST_WX[terr] || 'clear') : MS_CFG.BASE_WX;
+  settings.wxType = wx; settings.wxAutoWind = (m.wx === 'worst' && !m.wind);
+  settings.windSpd = m.wind ? MS_CFG.EXTREME_WIND_SPD : 0;
+  if (m.wind) settings.windDir = MS_CFG.EXTREME_WIND_DIR;
+  try { WX.set(wx); WX.snap(); WX.syncUI(); } catch (e) {}
+};
+MS.restoreEnv = function () {
+  if (!MS.saved) return;
+  Object.assign(settings, MS.saved); MS.saved = null;
+  try { WX.syncUI(); } catch (e) {}
+};
+
+/* ---------- 绿环 ---------- */
+MS.buildRings = function (padY) {
+  const pts = MS_CFG.RING_PTS, rings = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = new THREE.Vector3(pts[i][0], padY + pts[i][2], pts[i][1]);
+    const a = pts[Math.min(i + 1, pts.length - 1)], b = pts[Math.max(i - 1, 0)];
+    const n = new THREE.Vector3(a[0] - b[0], 0, a[1] - b[1]).normalize();
+    const mat = new THREE.MeshBasicMaterial({ color: 0x30ff70, transparent: true, opacity: 0.3, fog: false, depthWrite: false });
+    const mesh = new THREE.Mesh(new THREE.TorusGeometry(MS_CFG.RING_R, MS_CFG.RING_TUBE, 12, 48), mat);
+    mesh.position.copy(p); mesh.lookAt(p.clone().add(n));
+    scene.add(mesh);
+    rings.push({ mesh, pos: p, n });
+  }
+  return rings;
+};
+MS.removeRings = function () {
+  if (!MS.st || !MS.st.rings) return;
+  for (const r of MS.st.rings) { scene.remove(r.mesh); r.mesh.geometry.dispose(); r.mesh.material.dispose(); }
+  MS.st.rings = null;
+};
+MS.ringState = function () {
+  const s = MS.st;
+  s.rings.forEach((r, i) => {
+    r.mesh.visible = i >= s.idx;
+    r.mesh.material.opacity = (s.stage === 1 && i === s.idx) ? 0.95 : 0.3;
+    r.mesh.material.color.setHex((s.stage === 1 && i === s.idx) ? 0x7dffa8 : 0x30ff70);
+  });
+};
+
+/* ---------- 启动 / 清理 ---------- */
+MS.launch = function (id) {
+  const m = MISSIONS[id]; if (!m) return;
+  MS.cleanupMission();
+  MS.mode = 'mission'; MS.active = id; MS.sel = id; paused = false;
+  msShow('ms-res', false);
+  if (hangarOpen) closeHangar();
+  enterGame();
+  clearNPCs();
+  MS.applyEnv(m);
+  MS.applyBody();
+  if (aircraftId !== m.craft) { initPreview(); setAircraft(m.craft); }
+  resetHeli();
+  assist = !m.noAssist;
+  const padY = terrainHeight(0, 0);
+  MS.st = { t: 0, over: false, padY, prev: new THREE.Vector3(), stage: 0, idx: 0, rings: null, air: 0, hunted: 0, npc: null, land: 0 };
+  if (m.spawnHigh) {
+    H.pos.set(0, padY + MS_CFG.EXTREME_ALT, 0); H.vel.set(0, 0, 0);
+    H.onGround = false; engineOn = true; rotorSpool = 1; H.coll = HOVER_COLL;
+    setEngineButton(true); AC.group.position.copy(H.pos);
+  }
+  MS.st.prev.copy(H.pos);
+  if (m.kind === 'rings') { MS.st.rings = MS.buildRings(padY); MS.ringState(); }
+  if (m.kind === 'duel') {
+    MS.st.npc = spawnNPC('chase', { x: MS_CFG.NPC_DIST, z: MS_CFG.NPC_DIST }, { defId: 'y407' });
+  }
+  MS.applyBody(); refreshPauseUI();
+  toast('任务开始：' + m.name, 2.5);
+};
+MS.cleanupMission = function () {
+  MS.removeRings();
+  $ms('ms-hud').textContent = '';
+};
+MS.cleanup = function () {
+  if (!MS.inMission() && !MS.saved) return;
+  MS.cleanupMission();
+  if (MS.inMission()) clearNPCs();
+  MS.restoreEnv();
+  MS.mode = 'sandbox'; MS.active = null; MS.st = null; paused = false;
+  msShow('ms-res', false);
+  MS.applyBody();
+  if (MS.isLocked(aircraftId)) setAircraft('y206');
+};
+MS.quit = function () { MS.cleanup(); backToMainMenu(); MS.openPage('exit'); };
+$ms('ms-retry').onclick = () => { closePause(); MS.launch(MS.active); };
+$ms('ms-quit').onclick = () => { closePause(); MS.quit(); };
+$ms('msr-retry').onclick = () => MS.launch(MS.active);
+$ms('msr-list').onclick = () => { msShow('ms-res', false); MS.quit(); };
+
+MS.finish = function (ok, msg) {
+  const s = MS.st, m = MISSIONS[MS.active];
+  if (!s || s.over) return;
+  s.over = true;
+  if (ok) { MS.done[m.id] = true; MS.save(); if (Object.keys(MISSIONS).every(k => MS.done[k])) achUnlock('pilot'); }
+  $ms('msr-t').textContent = ok ? '任务完成' : '任务失败';
+  $ms('msr-t').style.color = ok ? '#7fe9a8' : '#ff9a9a';
+  $ms('msr-m').textContent = msg || '';
+  $ms('msr-r').textContent = ok ? m.reward : '';
+  paused = true; silenceAudio();
+  msShow('ms-res', true);
+};
+
+/* ---------- 每帧逻辑 ---------- */
+const MS_DIRS = ['北', '东北', '东', '东南', '南', '西南', '西', '西北'];
+let msHudT = 0;
+MS.tick = function (dt) {
+  if (!MS.inMission() || !MS.st || MS.st.over) return;
+  const s = MS.st, m = MISSIONS[MS.active];
+  s.t += dt;
+  if (m.noAssist && assist) assist = false;
+  const alt = H.pos.y - s.padY;
+  if (H.crashed || shattered || (m.kind === 'extreme' && H.fire > 0)) {
+    MS.finish(false, H.fire > 0 ? '机体起火' : '机体损毁'); return;
+  }
+  let txt = m.name;
+  if (m.kind === 'rings') {
+    if (s.stage === 0) {
+      txt += ' · 爬升至 ' + MS_CFG.CLIMB_ALT + ' m（当前 ' + Math.max(0, alt | 0) + ' m）';
+      if (alt >= MS_CFG.CLIMB_ALT) { s.stage = 1; MS.ringState(); toast('已到达 ' + MS_CFG.CLIMB_ALT + ' 米，按顺序穿过绿环', 2.5); }
+    } else {
+      const r = s.rings[s.idx];
+      const d0 = _msV.copy(s.prev).sub(r.pos).dot(r.n), d1 = _msV.copy(H.pos).sub(r.pos).dot(r.n);
+      if (d0 * d1 <= 0 && d0 !== d1) {
+        const k = d0 / (d0 - d1);
+        _msV.copy(s.prev).lerp(H.pos, k);
+        if (_msV.distanceTo(r.pos) <= MS_CFG.RING_R) {
+          s.idx++;
+          if (s.idx >= s.rings.length) { MS.ringState(); MS.finish(true, '全部绿环已穿过'); return; }
+          MS.ringState(); toast('✔ 绿环 ' + s.idx + '/' + s.rings.length, 1.4);
+        }
+      }
+      const q = s.rings[s.idx];
+      if (q) {
+        const dx = q.pos.x - H.pos.x, dz = q.pos.z - H.pos.z;
+        const brg = Math.atan2(dx, -dz), di = Math.round(((brg * 180 / Math.PI % 360 + 360) % 360) / 45) % 8;
+        txt += ' · 绿环 ' + (s.idx + 1) + '/' + s.rings.length + ' · ' + MS_DIRS[di] + ' ' + Math.round(Math.hypot(dx, dz, q.pos.y - H.pos.y)) + ' m';
+      }
+    }
+  } else if (m.kind === 'weather') {
+    if (!H.onGround) s.air += dt;
+    txt += ' · 空中坚持 ' + Math.floor(s.air) + '/' + MS_CFG.WX_TIME + ' s';
+    if (s.air >= MS_CFG.WX_TIME) { MS.finish(true, '成功在恶劣天气中飞行 3 分钟'); return; }
+  } else if (m.kind === 'duel') {
+    const n = s.npc;
+    if (n && n.huntTarget === player && craftAlive(n) && !s.hunted) s.hunted = 0.0001;
+    if (s.hunted) s.hunted += dt;
+    if (n && !craftAlive(n)) { MS.finish(true, '已击落追击 NPC'); return; }
+    if (s.hunted >= MS_CFG.SURVIVE_TIME) { MS.finish(true, '被追击后成功存活 ' + MS_CFG.SURVIVE_TIME + ' 秒'); return; }
+    txt += s.hunted ? ' · 被追击，存活 ' + Math.floor(s.hunted) + '/' + MS_CFG.SURVIVE_TIME + ' s' : ' · 击落 NPC 或被追击后存活 ' + MS_CFG.SURVIVE_TIME + ' s';
+  } else if (m.kind === 'extreme') {
+    const slow = H.vel.length() < 2;
+    if (H.onGround && slow && s.t > 3) s.land += dt; else s.land = 0;
+    txt += s.land > 0 ? ' · 已落地，保持 ' + Math.ceil(MS_CFG.LAND_HOLD - s.land) + ' s' : ' · 高度 ' + Math.max(0, alt | 0) + ' m，安全降落';
+    if (s.land >= MS_CFG.LAND_HOLD) { MS.finish(true, '安全降落，机体未着火'); return; }
+  }
+  s.prev.copy(H.pos);
+  msHudT -= dt;
+  if (msHudT <= 0) { msHudT = 0.2; $ms('ms-hud').textContent = txt; }
+};
+const _msV = new THREE.Vector3();
+
 requestAnimationFrame(loop);
 /* ===== 主菜单背景随机轮播 ===== */
 (function () {
