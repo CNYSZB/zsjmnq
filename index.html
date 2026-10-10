@@ -625,7 +625,7 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <button id="btn-credits" class="ghost">制 作 人 员</button>
   </div>
 </div>
-  <div class="corner">v1.1.4</div>
+  <div class="corner">v1.5.0</div>
 </div>
 
 <div id="mapselect">
@@ -697,6 +697,16 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <input type="range" id="windSl" class="wsl" min="0" max="30" step="1" value="4"></div>
 <div class="opt"><label>风力随天气<span class="hint">开=自动叠加天气风；关=仅用手动风</span></label>
   <div class="tgl on" id="wxAutoWind"></div></div>
+<div class="opt"><label>泛光 Bloom<span class="hint">亮部向外晕开发光（太阳/月亮/火焰），耗性能</span></label>
+  <div class="tgl" data-key="bloom"></div></div>
+<div class="opt"><label>体积光 God Rays<span class="hint">太阳/月亮被遮挡时，边缘射出光束（丁达尔效应）</span></label>
+  <div class="tgl" data-key="godrays"></div></div>
+<div class="opt"><label>抗锯齿 FXAA<span class="hint">后处理抗锯齿；仅在开启泛光/体积光/滤镜/本项时才有开销</span></label>
+  <div class="tgl" data-key="fxaa"></div></div>
+<div class="opt"><label>滤镜 / 调色<span class="hint">进入后隐藏界面并暂停游戏，可调饱和度/明度等</span></label>
+  <button id="btn-grade-open" style="padding:7px 13px;font-size:11.5px;font-family:inherit;
+    background:rgba(50,140,175,.35);color:#eafaff;border:1px solid rgba(100,190,220,.45);
+    border-radius:2px;cursor:pointer;">打开</button></div>
     <button id="btn-set-close">返 回</button>
 <div style="font-size:11.5px;line-height:2;color:#8fb3c7;">
   <div><b style="color:#9fe8ff;">WASD</b> —— 左摇杆（总距 + 脚舵）</div>
@@ -1044,7 +1054,8 @@ const settings = {
   atmosphere: true, clouds: true, cloudShadow: true,
   shadows: true, airDensity: true, dayNight: true,
   terrainStyle: 'hill',
-  wxType: 'auto', windDir: 90, windSpd: 4, wxAutoWind: true
+  wxType: 'auto', windDir: 90, windSpd: 4, wxAutoWind: true,
+  bloom: false, godrays: false, fxaa: false
 };
 const VIEW_CFG = {
   near: { fogNear: 180, fogFar: 1400, camFar: 6000,  farTerrain: false },
@@ -8415,6 +8426,392 @@ const WX = (() => {
   panel.addEventListener('click', (e) => { if (e.target === panel) panel.classList.remove('show'); });
 })();
 
+/* =====================================================================
+   FX 后期：泛光 / 体积光 / FXAA / 月亮 / 调色滤镜（补丁新增）
+   原理：主场景照常画到屏幕 → 拷贝帧缓冲 → 额外通道叠加，关闭时零开销
+   ===================================================================== */
+const FX_CFG = {
+  BLOOM_THRESHOLD: 0.90,  // 泛光亮度阈值(0~1)：越低越多东西发光，太低会整屏发白
+  BLOOM_STRENGTH: 1.1,    // 泛光强度
+  BLOOM_RADIUS: 1.0,      // 泛光扩散半径倍率
+  RAYS_STRENGTH: 1.0,     // 体积光强度
+  RAYS_DECAY: 0.95,       // 光束衰减(0.90短 ~ 0.99长)
+  RAYS_LENGTH: 0.95,      // 光束长度(0~1，占"像素到光源"距离的比例)
+  RAYS_SAMPLES: 36,       // 光束采样数，越大越平滑越耗性能
+  MOON_RAY_MULT: 0.6,     // 月光体积光相对太阳的强度
+  MOON_DIST: 7800,        // 月亮距离
+  MOON_SIZE: 620,         // 月盘直径
+  MOON_GLOW: 3200,        // 月晕直径
+  MOON_COLOR: 0xf2f5ff,   // 月亮颜色
+  GLOW_SIZE: 0.07,        // 太阳/月亮程序化光晕大小(占屏幕高度比例)
+  GLOW_BOOST: 1.6,        // 光晕亮度，越大遮挡边缘的辉光越明显
+  SKY_MASK_LO: 0.45,      // 天空判定下限：亮度低于此值的像素视为遮挡物(直升机/地形)
+  SKY_MASK_HI: 0.70       // 天空判定上限
+};
+const GRADE_DEFS = [   // [键, 名称, 最小, 最大, 步长, 默认]
+  ['bright',   '明度',   -0.5, 0.5, 0.01, 0],
+  ['contrast', '对比度',  0.5, 1.8, 0.01, 1],
+  ['sat',      '饱和度',  0.0, 2.5, 0.01, 1],
+  ['hue',      '色相',  -180, 180, 1,    0],
+  ['temp',     '色温',   -1,  1,   0.01, 0],
+  ['tint',     '色调',   -1,  1,   0.01, 0],
+  ['gamma',    '伽马',   0.5, 2.0, 0.01, 1],
+  ['vig',      '暗角',   0,   1,   0.01, 0],
+  ['sharp',    '锐化',   0,   1.5, 0.01, 0]
+];
+const GR = { on: true };
+GRADE_DEFS.forEach(d => GR[d[0]] = d[5]);
+try { Object.assign(GR, JSON.parse(localStorage.getItem('heli2026_grade') || '{}')); } catch (e) {}
+const gradeSave = () => { try { localStorage.setItem('heli2026_grade', JSON.stringify(GR)); } catch (e) {} };
+const gradeActive = () => GR.on && GRADE_DEFS.some(d => Math.abs(GR[d[0]] - d[5]) > 1e-4);
+
+/* ---------- 月亮 ---------- */
+const moonDirVec = new THREE.Vector3();
+const moonTex = (() => {
+  const S = 256, cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.save(); g.beginPath(); g.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); g.clip();
+  const gr = g.createRadialGradient(S * .42, S * .42, S * .1, S / 2, S / 2, S / 2);
+  gr.addColorStop(0, '#fbfcff'); gr.addColorStop(1, '#dde2ee');
+  g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 9; i++) {
+    g.fillStyle = 'rgba(120,130,150,' + (0.16 + rnd() * 0.14) + ')'; g.beginPath();
+    g.ellipse(S * (.25 + rnd() * .5), S * (.2 + rnd() * .6), S * (.06 + rnd() * .12), S * (.04 + rnd() * .1), rnd() * 3, 0, Math.PI * 2); g.fill();
+  }
+  for (let i = 0; i < 28; i++) {
+    g.fillStyle = 'rgba(110,120,140,0.14)'; g.beginPath();
+    g.arc(S * (.15 + rnd() * .7), S * (.15 + rnd() * .7), S * (.008 + rnd() * .025), 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const glowTex = (() => {
+  const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d'), gr = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  gr.addColorStop(0, 'rgba(255,255,255,0.55)'); gr.addColorStop(0.25, 'rgba(200,220,255,0.22)'); gr.addColorStop(1, 'rgba(180,200,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const moonGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xaec8ff, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false, opacity: 0 }));
+const moonDisc = new THREE.Sprite(new THREE.SpriteMaterial({ map: moonTex, color: FX_CFG.MOON_COLOR, transparent: true, depthWrite: false, fog: false, opacity: 0 }));
+moonGlow.renderOrder = -6; moonDisc.renderOrder = -5;
+moonGlow.frustumCulled = moonDisc.frustumCulled = false;
+moonGlow.visible = moonDisc.visible = false;
+scene.add(moonGlow); scene.add(moonDisc);
+function fxUpdateMoon() {
+  moonDirVec.set(-sunDirVec.x, -sunDirVec.y, -sunDirVec.z + 0.35).normalize();
+  const vis = clamp(-sunElev * 5 + 0.25, 0, 1);
+  const on = vis > 0.01 && settings.atmosphere && moonDirVec.y > -0.03;
+  moonDisc.visible = moonGlow.visible = on;
+  if (!on) return;
+  const dist = Math.min(FX_CFG.MOON_DIST, camera.far * 0.85), k = dist / FX_CFG.MOON_DIST;
+  moonDisc.position.copy(camera.position).addScaledVector(moonDirVec, dist);
+  moonGlow.position.copy(moonDisc.position);
+  moonDisc.scale.setScalar(FX_CFG.MOON_SIZE * k);
+  moonGlow.scale.setScalar(FX_CFG.MOON_GLOW * k);
+  moonDisc.material.opacity = vis; moonGlow.material.opacity = vis * 0.7;
+}
+
+/* ---------- 后处理管线 ---------- */
+const _fxOrigRender = renderer.render.bind(renderer);  // 联机补丁之前的原始 render
+const _fxRaw = (sc, cam) => _fxOrigRender(sc, cam);
+const fxScene = new THREE.Scene(), fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const fxQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); fxQuad.frustumCulled = false; fxScene.add(fxQuad);
+const FX_VS = 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }';
+const fxMat = (frag, u) => new THREE.ShaderMaterial({ vertexShader: FX_VS, fragmentShader: frag, uniforms: u, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+let fxBroken = false, fxInit = false, fxW = 0, fxH = 0, fxFB = null;
+let rtBright, rtA, rtB, rtC, rtD, rtRays, mBright, mBlur, mRays, mComp;
+const _fxV2 = new THREE.Vector2(), _fxZero = new THREE.Vector2(0, 0);
+const _fxP = new THREE.Vector3(), _fxF = new THREE.Vector3(), _fxL = new THREE.Vector3();
+let gradeCompare = false;
+const mkRT = (w, h) => new THREE.WebGLRenderTarget(Math.max(2, w | 0), Math.max(2, h | 0), { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+
+function fxBuild() {
+  mBright = fxMat(`uniform sampler2D tSrc; uniform float uThr,uLight,uAspect,uSize,uLo,uHi; uniform vec2 uL; uniform vec3 uCol; varying vec2 vUv;
+    void main(){ vec3 c=texture2D(tSrc,vUv).rgb; float luma=dot(c,vec3(.299,.587,.114));
+      float l=luma*.6+max(max(c.r,c.g),c.b)*.4;
+      vec3 o=c*smoothstep(uThr,1.0,l);
+      float d=length((vUv-uL)*vec2(uAspect,1.));
+      float g=exp(-d*d/(2.*uSize*uSize))*1.3+exp(-d/(uSize*2.5))*0.45;
+      float sky=smoothstep(uLo,uHi,luma);
+      o+=uCol*g*uLight*sky;
+      gl_FragColor=vec4(o,1.); }`, { tSrc: { value: null }, uThr: { value: 0.9 }, uLight: { value: 0 }, uAspect: { value: 1 }, uSize: { value: 0.07 },
+      uLo: { value: 0.45 }, uHi: { value: 0.7 }, uL: { value: new THREE.Vector2(.5, .5) }, uCol: { value: new THREE.Vector3(1, 1, 1) } });
+  mBlur = fxMat(`uniform sampler2D tSrc; uniform vec2 uDir; varying vec2 vUv;
+    void main(){ vec3 s=texture2D(tSrc,vUv).rgb*0.2270270270;
+      s+=(texture2D(tSrc,vUv+uDir*1.3846153846).rgb+texture2D(tSrc,vUv-uDir*1.3846153846).rgb)*0.3162162162;
+      s+=(texture2D(tSrc,vUv+uDir*3.2307692308).rgb+texture2D(tSrc,vUv-uDir*3.2307692308).rgb)*0.0702702703;
+      gl_FragColor=vec4(s,1.); }`, { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } });
+  mRays = fxMat(`#define N ${FX_CFG.RAYS_SAMPLES}
+    uniform sampler2D tSrc; uniform vec2 uL; uniform float uDecay,uLen; varying vec2 vUv;
+    void main(){ vec2 d=(uL-vUv)*uLen/float(N); vec2 uv=vUv; float w=1.; vec3 s=vec3(0.);
+      for(int i=0;i<N;i++){ uv+=d; s+=texture2D(tSrc,clamp(uv,0.,1.)).rgb*w; w*=uDecay; }
+      gl_FragColor=vec4(s/float(N)*1.8,1.); }`, { tSrc: { value: null }, uL: { value: new THREE.Vector2(.5, .5) }, uDecay: { value: 0.95 }, uLen: { value: 0.95 } });
+  mComp = fxMat(`uniform sampler2D tBase,tB1,tB2,tRays; uniform vec2 uTexel;
+    uniform float uBloom,uRays,uFxaa,uGrade,uSharp; uniform vec3 uRayCol; uniform vec4 uG1,uG2; varying vec2 vUv;
+    vec3 T(vec2 p){ return texture2D(tBase,p).rgb; }
+    vec3 hueRot(vec3 c,float a){ float cs=cos(a),sn=sin(a);
+      return vec3(
+        dot(c,vec3(0.213+cs*0.787-sn*0.213, 0.715-cs*0.715-sn*0.715, 0.072-cs*0.072+sn*0.928)),
+        dot(c,vec3(0.213-cs*0.213+sn*0.143, 0.715+cs*0.285+sn*0.140, 0.072-cs*0.072-sn*0.283)),
+        dot(c,vec3(0.213-cs*0.213-sn*0.787, 0.715-cs*0.715+sn*0.715, 0.072+cs*0.928+sn*0.072))); }
+    vec3 fxaa(vec2 uv){ vec2 px=uTexel; vec3 lm=vec3(.299,.587,.114);
+      vec3 M=T(uv),NW=T(uv+vec2(-1.,-1.)*px),NE=T(uv+vec2(1.,-1.)*px),SW=T(uv+vec2(-1.,1.)*px),SE=T(uv+vec2(1.,1.)*px);
+      float lM=dot(M,lm),lNW=dot(NW,lm),lNE=dot(NE,lm),lSW=dot(SW,lm),lSE=dot(SE,lm);
+      float lMin=min(lM,min(min(lNW,lNE),min(lSW,lSE))),lMax=max(lM,max(max(lNW,lNE),max(lSW,lSE)));
+      vec2 dir=vec2(-((lNW+lNE)-(lSW+lSE)),((lNW+lSW)-(lNE+lSE)));
+      float dr=max((lNW+lNE+lSW+lSE)*0.25*0.125,1./128.);
+      dir=clamp(dir/(min(abs(dir.x),abs(dir.y))+dr),vec2(-8.),vec2(8.))*px;
+      vec3 A=0.5*(T(uv+dir*(1./3.-0.5))+T(uv+dir*(2./3.-0.5)));
+      vec3 B=A*0.5+0.25*(T(uv+dir*-0.5)+T(uv+dir*0.5));
+      float lB=dot(B,lm); return (lB<lMin||lB>lMax)?A:B; }
+    void main(){
+      vec3 col = uFxaa>0.5 ? fxaa(vUv) : T(vUv);
+      if(uSharp>0.001){ vec3 a=(T(vUv+vec2(uTexel.x,0.))+T(vUv-vec2(uTexel.x,0.))+T(vUv+vec2(0.,uTexel.y))+T(vUv-vec2(0.,uTexel.y)))*0.25; col+=(col-a)*uSharp*1.5; }
+      vec3 add=vec3(0.);
+      if(uBloom>0.) add+=(texture2D(tB1,vUv).rgb*0.6+texture2D(tB2,vUv).rgb*0.9)*uBloom;
+      if(uRays>0.) add+=texture2D(tRays,vUv).rgb*uRayCol*uRays;
+      col=1.-(1.-clamp(col,0.,1.))*(1.-clamp(add,0.,1.));
+      if(uGrade>0.5){
+        col+=uG1.x; col=(col-0.5)*uG1.y+0.5; col=hueRot(col,uG1.w);
+        float l=dot(col,vec3(.299,.587,.114)); col=mix(vec3(l),col,uG1.z);
+        col.r+=uG2.x*0.10; col.b-=uG2.x*0.10; col.g-=uG2.y*0.08; col.r+=uG2.y*0.04; col.b+=uG2.y*0.04;
+        col=pow(max(col,vec3(0.)),vec3(1./uG2.z));
+        col*=1.-uG2.w*smoothstep(0.25,0.75,length(vUv-0.5));
+      }
+      gl_FragColor=vec4(clamp(col,0.,1.),1.); }`,
+    { tBase: { value: null }, tB1: { value: null }, tB2: { value: null }, tRays: { value: null }, uTexel: { value: new THREE.Vector2() },
+      uBloom: { value: 0 }, uRays: { value: 0 }, uFxaa: { value: 0 }, uGrade: { value: 0 }, uSharp: { value: 0 },
+      uRayCol: { value: new THREE.Vector3(1, 1, 1) }, uG1: { value: new THREE.Vector4() }, uG2: { value: new THREE.Vector4() } });
+}
+function fxEnsure() {
+  renderer.getDrawingBufferSize(_fxV2);
+  const w = _fxV2.x | 0, h = _fxV2.y | 0;
+  if (fxInit && w === fxW && h === fxH) return;
+  if (!mComp) fxBuild();
+  if (fxFB) fxFB.dispose();
+  [rtBright, rtA, rtB, rtC, rtD, rtRays].forEach(r => r && r.dispose());
+  fxW = w; fxH = h; fxInit = true;
+  fxFB = new THREE.FramebufferTexture(w, h);
+  rtBright = mkRT(w / 2, h / 2); rtA = mkRT(w / 4, h / 4); rtB = mkRT(w / 4, h / 4);
+  rtC = mkRT(w / 8, h / 8); rtD = mkRT(w / 8, h / 8); rtRays = mkRT(w / 4, h / 4);
+}
+function fxPass(mat, target) { fxQuad.material = mat; renderer.setRenderTarget(target); _fxRaw(fxScene, fxCam); }
+function fxBlur(src, dst, dx, dy, r) {
+  mBlur.uniforms.tSrc.value = src.texture;
+  mBlur.uniforms.uDir.value.set(dx * r / dst.width, dy * r / dst.height);
+  fxPass(mBlur, dst);
+}
+const fxActive = () => !fxBroken && (settings.bloom || settings.godrays || settings.fxaa || gradeActive());
+const _ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+let _fxToast = null;
+function fxWarn(m) {
+  if (!_fxToast) {
+    _fxToast = document.createElement('div');
+    _fxToast.style.cssText = 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:300;padding:6px 12px;background:rgba(120,20,20,.9);color:#fff;font-size:11px;border-radius:3px;pointer-events:none;max-width:90%;';
+    document.body.appendChild(_fxToast);
+  }
+  _fxToast.textContent = m; _fxToast.style.display = 'block';
+  setTimeout(() => { _fxToast.style.display = 'none'; }, 9000);
+}
+function renderFX() {
+  fxUpdateMoon();
+  renderer.render(scene, camera);
+  if (!fxActive()) return;
+  const prevAuto = renderer.autoClear;
+  try {
+    fxEnsure();
+    renderer.copyFramebufferToTexture(_fxZero, fxFB);
+    renderer.autoClear = false;
+    // 光源(太阳/月亮)屏幕位置与强度
+    let lightOn = 0, useSun = sunElev > -0.02;
+    if ((settings.bloom || settings.godrays) && settings.atmosphere) {
+      _fxL.copy(useSun ? sunDirVec : moonDirVec);
+      _fxP.copy(camera.position).addScaledVector(_fxL, 1000).project(camera);
+      camera.getWorldDirection(_fxF);
+      lightOn = _ss(0.0, 0.3, _fxF.dot(_fxL)) * _ss(-0.06, 0.08, _fxL.y) * (useSun ? 1 : FX_CFG.MOON_RAY_MULT);
+    }
+    const lc = useSun ? skyUniforms.uSunTint.value : null;
+    const lr = lc ? lc.r : 0.75, lg = lc ? lc.g : 0.85, lb = lc ? lc.b : 1.0;
+    if (settings.bloom || settings.godrays) {
+      const bu = mBright.uniforms;
+      bu.tSrc.value = fxFB; bu.uThr.value = FX_CFG.BLOOM_THRESHOLD;
+      bu.uLight.value = lightOn * FX_CFG.GLOW_BOOST; bu.uAspect.value = fxW / fxH; bu.uSize.value = FX_CFG.GLOW_SIZE;
+      bu.uLo.value = FX_CFG.SKY_MASK_LO; bu.uHi.value = FX_CFG.SKY_MASK_HI;
+      bu.uL.value.set(_fxP.x * .5 + .5, _fxP.y * .5 + .5); bu.uCol.value.set(lr, lg, lb);
+      fxPass(mBright, rtBright);
+    }
+    let rayK = 0;
+    if (settings.godrays && lightOn > 0.001) {
+      rayK = lightOn * FX_CFG.RAYS_STRENGTH;
+      mRays.uniforms.tSrc.value = rtBright.texture;
+      mRays.uniforms.uL.value.set(clamp(_fxP.x * .5 + .5, -0.6, 1.6), clamp(_fxP.y * .5 + .5, -0.6, 1.6));
+      mRays.uniforms.uDecay.value = FX_CFG.RAYS_DECAY; mRays.uniforms.uLen.value = FX_CFG.RAYS_LENGTH;
+      fxPass(mRays, rtRays);
+      mComp.uniforms.uRayCol.value.set(lr, lg, lb);
+    }
+    if (settings.bloom) {
+      const r = FX_CFG.BLOOM_RADIUS;
+      fxBlur(rtBright, rtA, 1, 0, r); fxBlur(rtA, rtB, 0, 1, r);
+      fxBlur(rtB, rtC, 1, 0, r); fxBlur(rtC, rtD, 0, 1, r);
+    }
+    const u = mComp.uniforms, g = (gradeActive() && !gradeCompare);
+    u.tBase.value = fxFB; u.tB1.value = rtB.texture; u.tB2.value = rtD.texture; u.tRays.value = rtRays.texture;
+    u.uTexel.value.set(1 / fxW, 1 / fxH);
+    u.uBloom.value = settings.bloom ? FX_CFG.BLOOM_STRENGTH : 0;
+    u.uRays.value = rayK > 0.001 ? rayK : 0;
+    u.uFxaa.value = settings.fxaa ? 1 : 0;
+    u.uGrade.value = g ? 1 : 0;
+    u.uSharp.value = g ? GR.sharp : 0;
+    u.uG1.value.set(GR.bright, GR.contrast, GR.sat, GR.hue * Math.PI / 180);
+    u.uG2.value.set(GR.temp, GR.tint, GR.gamma, GR.vig);
+    fxPass(mComp, null);
+    const gl = renderer.getContext(), er = gl.getError();
+    if (er !== gl.NO_ERROR && !fxBroken) { fxBroken = true; fxWarn('后期特效已停用：WebGL错误 0x' + er.toString(16)); }
+  } catch (e) {
+    fxBroken = true; renderer.setRenderTarget(null);
+    fxWarn('后期特效已停用：' + (e && e.message || e));
+    console.warn('[FX] 后处理失败，已自动关闭：', e);
+  }
+  renderer.autoClear = prevAuto;
+}
+
+/* ---------- 设置面板联动 + 调色悬浮窗 ---------- */
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const saveSettings = () => { try { localStorage.setItem('heli2026_settings', JSON.stringify(settings)); } catch (e) {} };
+  const syncToggles = () => ['bloom', 'godrays', 'fxaa'].forEach(k => {
+    const t = document.querySelector('.tgl[data-key="' + k + '"]'); if (t) t.classList.toggle('on', !!settings[k]);
+  });
+  document.querySelectorAll('.tgl[data-key="bloom"],.tgl[data-key="godrays"],.tgl[data-key="fxaa"]').forEach(t => t.addEventListener('click', saveSettings));
+  ['btn-settings', 'pm-settings'].forEach(id => { const b = $(id); if (b) b.addEventListener('click', syncToggles); });
+  setTimeout(syncToggles, 1500);
+
+  const st = document.createElement('style');
+  st.textContent = `#gradePanel{position:fixed;right:12px;top:12px;width:240px;max-height:calc(100% - 24px);display:none;flex-direction:column;z-index:170;
+    background:rgba(8,18,26,.93);border:1px solid rgba(120,190,220,.45);border-radius:4px;color:#dff3ff;font-size:11px;font-family:inherit;}
+    #gradePanel.show{display:flex;}
+    #gradeHead{padding:8px 10px;cursor:grab;background:rgba(40,100,130,.4);letter-spacing:2px;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;justify-content:space-between;align-items:center;}
+    #gradeBody{overflow-y:auto;padding:6px 10px 10px;}
+    .gr-row{display:flex;align-items:center;gap:6px;margin:6px 0;}
+    .gr-row span{width:42px;flex:none;}
+    .gr-row input{flex:1;min-width:0;touch-action:none;}
+    .gr-row em{width:36px;text-align:right;font-style:normal;opacity:.8;}
+    .gr-btns{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0;}
+    #gradePanel button,#gradePanel select,#gradePanel input[type=text],#gradePanel textarea{font-family:inherit;font-size:11px;color:#eafaff;background:rgba(50,140,175,.3);
+      border:1px solid rgba(100,190,220,.45);border-radius:2px;padding:5px 8px;}
+    #gradePanel textarea{width:100%;box-sizing:border-box;height:46px;user-select:text;-webkit-user-select:text;resize:none;}
+    #gradePanel input[type=text]{flex:1;min-width:0;user-select:text;-webkit-user-select:text;}
+    #gr-msg{opacity:.75;min-height:14px;}`;
+  document.head.appendChild(st);
+
+  const p = document.createElement('div'); p.id = 'gradePanel';
+  p.innerHTML = `<div id="gradeHead"><b>滤 镜 调 色</b><button id="gr-done">完成</button></div><div id="gradeBody">
+    <div class="gr-row"><span>启用</span><input type="checkbox" id="gr-on" style="flex:none"></div>
+    <div id="gr-sliders"></div>
+    <div class="gr-btns"><button id="gr-reset">重置</button><button id="gr-cmp">按住对比原图</button></div>
+    <div class="gr-row"><input type="text" id="gr-name" placeholder="预设名称"><button id="gr-save">保存</button></div>
+    <div class="gr-row"><select id="gr-sel" style="flex:1;min-width:0"></select><button id="gr-del">删除</button></div>
+    <div class="gr-btns"><button id="gr-gen">生成分享码</button><button id="gr-imp">导入</button></div>
+    <textarea id="gr-code" placeholder="分享码 HG1:... 粘贴到此处后点导入"></textarea><div id="gr-msg"></div></div>`;
+  document.body.appendChild(p);
+
+  const msg = (t) => { $('gr-msg').textContent = t; };
+  const slWrap = $('gr-sliders'), sl = {};
+  GRADE_DEFS.forEach(d => {
+    const row = document.createElement('div'); row.className = 'gr-row';
+    row.innerHTML = `<span>${d[1]}</span><input type="range" min="${d[2]}" max="${d[3]}" step="${d[4]}"><em></em>`;
+    const inp = row.querySelector('input'), em = row.querySelector('em');
+    sl[d[0]] = { inp, em };
+    inp.addEventListener('input', () => { GR[d[0]] = parseFloat(inp.value); em.textContent = (+GR[d[0]]).toFixed(d[4] < 1 ? 2 : 0); gradeSave(); });
+    slWrap.appendChild(row);
+  });
+  const refresh = () => {
+    $('gr-on').checked = !!GR.on;
+    GRADE_DEFS.forEach(d => { const s = sl[d[0]]; s.inp.value = GR[d[0]]; s.em.textContent = (+GR[d[0]]).toFixed(d[4] < 1 ? 2 : 0); });
+  };
+  $('gr-on').addEventListener('change', e => { GR.on = e.target.checked; gradeSave(); });
+  $('gr-reset').addEventListener('click', () => { GRADE_DEFS.forEach(d => GR[d[0]] = d[5]); gradeSave(); refresh(); msg('已重置'); });
+  const cmp = $('gr-cmp');
+  ['pointerdown'].forEach(ev => cmp.addEventListener(ev, () => { gradeCompare = true; }));
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => cmp.addEventListener(ev, () => { gradeCompare = false; }));
+
+  const PK = 'heli2026_grade_presets';
+  const loadP = () => { try { return JSON.parse(localStorage.getItem(PK) || '{}') || {}; } catch (e) { return {}; } };
+  const refreshSel = (sel) => {
+    const P = loadP(), s = $('gr-sel'); s.innerHTML = '<option value="">— 选择预设 —</option>';
+    Object.keys(P).forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; s.appendChild(o); });
+    if (sel) s.value = sel;
+  };
+  const keys = GRADE_DEFS.map(d => d[0]);
+  const apply = (obj) => { keys.forEach((k, i) => { const d = GRADE_DEFS[i]; const v = Number(obj[k]); if (isFinite(v)) GR[k] = clamp(v, d[2], d[3]); }); gradeSave(); refresh(); };
+  $('gr-save').addEventListener('click', () => {
+    const n = ($('gr-name').value || '').trim(); if (!n) { msg('请先输入预设名称'); return; }
+    const P = loadP(), o = {}; keys.forEach(k => o[k] = GR[k]); P[n] = o;
+    try { localStorage.setItem(PK, JSON.stringify(P)); } catch (e) {}
+    refreshSel(n); msg('已保存：' + n);
+  });
+  $('gr-sel').addEventListener('change', e => { const o = loadP()[e.target.value]; if (o) { apply(o); $('gr-name').value = e.target.value; msg('已载入'); } });
+  $('gr-del').addEventListener('click', () => {
+    const n = $('gr-sel').value; if (!n) return; const P = loadP(); delete P[n];
+    try { localStorage.setItem(PK, JSON.stringify(P)); } catch (e) {} refreshSel(); msg('已删除');
+  });
+  $('gr-gen').addEventListener('click', () => {
+    const code = 'HG1:' + btoa(keys.map(k => +(+GR[k]).toFixed(3)).join(','));
+    const ta = $('gr-code'); ta.value = code; ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (!ok && navigator.clipboard) navigator.clipboard.writeText(code).then(() => msg('分享码已复制'), () => msg('请手动复制上方分享码'));
+    else msg(ok ? '分享码已复制' : '请手动复制上方分享码');
+  });
+  $('gr-imp').addEventListener('click', () => {
+    try {
+      const t = $('gr-code').value.replace(/\s+/g, '');
+      if (t.slice(0, 4) !== 'HG1:') throw 0;
+      const a = atob(t.slice(4)).split(',').map(Number);
+      if (a.length !== keys.length || a.some(v => !isFinite(v))) throw 0;
+      const o = {}; keys.forEach((k, i) => o[k] = a[i]); apply(o); msg('导入成功');
+    } catch (e) { msg('分享码无效'); }
+  });
+
+  // 拖动悬浮窗
+  const head = $('gradeHead'); let drag = null;
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    const r = p.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    p.style.left = r.left + 'px'; p.style.top = r.top + 'px'; p.style.right = 'auto';
+    head.setPointerCapture(e.pointerId); head.style.cursor = 'grabbing';
+  });
+  head.addEventListener('pointermove', e => {
+    if (!drag) return;
+    p.style.left = clamp(e.clientX - drag.dx, 0, innerWidth - 60) + 'px';
+    p.style.top = clamp(e.clientY - drag.dy, 0, innerHeight - 40) + 'px';
+  });
+  ['pointerup', 'pointercancel'].forEach(ev => head.addEventListener(ev, () => { drag = null; head.style.cursor = 'grab'; }));
+
+  // 进入 / 退出调色模式：隐藏 UI + 冻结物理（paused）
+  let gradeMode = false;
+  const openBtn = $('btn-grade-open');
+  function gradeEnter() {
+    if (inMenu || hangarOpen) { if (openBtn) { openBtn.textContent = '请先进入游戏'; setTimeout(() => openBtn.textContent = '打开', 1600); } return; }
+    gradeMode = true; refresh(); refreshSel(); msg('');
+    $('settings').classList.remove('show');
+    if (pauseMask) pauseMask.classList.remove('show');
+    paused = true;
+    document.body.classList.add('freecam-hide-ui');
+    p.classList.add('show');
+  }
+  function gradeExit() {
+    if (!gradeMode) return; gradeMode = false; gradeCompare = false;
+    p.classList.remove('show'); document.body.classList.remove('freecam-hide-ui');
+    openPause();
+  }
+  if (openBtn) openBtn.addEventListener('click', gradeEnter);
+  $('gr-done').addEventListener('click', gradeExit);
+})();
+
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -8423,7 +8820,7 @@ function loop(now) {
   if (inMenu || hangarOpen) return;
   if (paused) {
     if (freecamActive) updateFreecam(dt);
-    renderer.render(scene, camera);
+    renderFX();
     return;
   }
 
@@ -8524,7 +8921,7 @@ if (panelTimer > 0.08) { panelTimer = 0; drawPanel(); drawCockpitMap(); }
 updateHUD(dt);
   updateAudio();
   updateNPCAudio();
-  renderer.render(scene, camera);
+  renderFX();
 }
 
 window.addEventListener('resize', () => {
