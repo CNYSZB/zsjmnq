@@ -152,6 +152,9 @@
   #windArrow i::before{content:'';position:absolute;left:-6px;top:-8px;border:8px solid transparent;
     border-bottom:14px solid #7fe9ff;border-top:0;}
   .wsl{width:100px;accent-color:#4fd2ff;}
+  #tcTrack{position:relative;flex:0 0 100%;height:30px;margin-top:6px;border:1px solid rgba(80,160,190,.35);border-radius:3px;background:repeating-linear-gradient(90deg,rgba(120,200,230,.4) 0,rgba(120,200,230,.4) 1px,transparent 1px,transparent 4.1667%),rgba(10,30,45,.55);touch-action:none;cursor:ew-resize;user-select:none;-webkit-user-select:none;}
+  #tcThumb{position:absolute;top:-3px;bottom:-3px;width:6px;margin-left:-3px;background:#4fd2ff;border-radius:3px;box-shadow:0 0 6px #4fd2ff;pointer-events:none;}
+  .tcin{background:rgba(10,30,45,.7);color:#eafaff;border:1px solid rgba(80,160,190,.4);border-radius:2px;padding:5px;font-family:inherit;font-size:11.5px;}
   .tgl{position:relative;width:46px;height:24px;border-radius:2px;flex:0 0 auto;
     background:rgba(16,32,44,.9);border:1px solid rgba(80,160,190,.3);transition:background .14s,border-color .14s;}
   .tgl::after{content:'';position:absolute;left:2px;top:2px;width:18px;height:18px;border-radius:1px;
@@ -625,7 +628,7 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
   <button id="btn-credits" class="ghost">制 作 人 员</button>
   </div>
 </div>
-  <div class="corner">v1.5.0</div>
+  <div class="corner">v2.0.1bata</div>
 </div>
 
 <div id="mapselect">
@@ -667,6 +670,10 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
       <div class="tgl on" data-key="clouds"></div></div>
     <div class="opt"><label>云层投影<span class="hint">两级分辨率，只落在地面</span></label>
       <div class="tgl on" data-key="cloudShadow"></div></div>
+    <div class="opt"><label>体积云<span class="hint">真3D体积云，可飞入云中；开启后全部使用体积云（替代平面云），耗性能</span></label>
+      <div class="tgl" data-key="volClouds"></div></div>
+    <div class="opt"><label>远处保持地形细节<span class="hint">关闭则远处地形纹理逐渐模糊（可减轻远处摩尔纹）</span></label>
+      <div class="tgl on" data-key="farDetail"></div></div>
     <div class="opt"><label>实时阴影<span class="hint">直升机自身投影</span></label>
       <div class="tgl on" data-key="shadows"></div></div>
     <div class="opt"><label>空气密度模拟<span class="hint">高度越高升力与阻力越低</span></label>
@@ -681,9 +688,24 @@ body.freecam-hide-ui #freecam-hint{display:none !important;}
     <button data-v="night">夜晚</button>
   </div>
 </div>
-    <div class="opt"><label>昼夜循环<span class="hint">约 8 分钟一个完整昼夜</span></label>
+    <div class="opt"><label>昼夜循环<span class="hint" id="dayLenHint">约 8 分钟一个完整昼夜</span></label>
       <div class="tgl on" data-key="dayNight">
 </div>
+</div>
+<div class="opt" style="flex-wrap:wrap;">
+  <label style="flex:1;">拖动调时间<span class="hint">左右拖动，首尾相接可无限循环（0:00:00 ↔ 23:59:59）</span></label>
+  <div id="tcClock" style="font:600 15px/1 monospace;color:#eafaff;letter-spacing:1px;">00:00:00</div>
+  <div id="tcTrack"><i id="tcThumb"></i></div>
+</div>
+<div class="opt"><label>同步现实时间<span class="hint" id="tcTz">按系统时区</span></label>
+  <div class="tgl" data-key="syncReal"></div></div>
+<div class="opt" id="tcLenRow" style="flex-wrap:wrap;">
+  <label style="flex:1;">一天时长<span class="hint" id="tcLenTxt">范围 1 分钟 ~ 24 小时</span></label>
+  <div style="display:flex;gap:6px;align-items:center;">
+    <input type="number" id="tcLenNum" class="tcin" min="1" step="any" style="width:64px;">
+    <select id="tcLenUnit" class="tcin"><option value="m">分钟</option><option value="h">小时</option></select>
+  </div>
+  <input type="range" id="tcLenSl" class="wsl" min="0" max="1000" step="1" style="flex:0 0 100%;width:100%;margin-top:6px;">
 </div>
 <div class="opt"><label>重新选择地图<span class="hint">打开全屏地图选择页</span></label>
   <button id="btn-reselect-map" style="padding:7px 13px;font-size:11.5px;font-family:inherit;
@@ -1050,8 +1072,9 @@ const settings = {
   renderScale: "1.0",
   quality: 'high', view: 'mid',
   timeOfDay: 'auto',
+  syncReal: false, dayLenSec: 480,
   searchLight: false,
-  atmosphere: true, clouds: true, cloudShadow: true,
+  atmosphere: true, clouds: true, cloudShadow: true, volClouds: false, farDetail: true,
   shadows: true, airDensity: true, dayNight: true,
   terrainStyle: 'hill',
   wxType: 'auto', windDir: 90, windSpd: 4, wxAutoWind: true,
@@ -1088,7 +1111,14 @@ camera.position.set(0, 8, 18);
    4. 昼夜
    ===================================================================== */
 let dayTime = 0.33;
-const DAY_LENGTH = 480;
+/* 时间系统配置 */
+const TIME_CFG = {
+  defDaySec: 480,        // 【默认一天时长(秒)】
+  minDaySec: 60,         // 【最短：1 分钟一天】
+  maxDaySec: 86400,      // 【最长：24 小时一天】
+  dragHoursPerTrack: 6   // 【拖动灵敏度】拖满整条滑轨 = 游戏内走多少小时；越小越精细
+};
+let timeDragging = false;
 let sunElev = 0;
 function lerpHex(a, b, t) {
   const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
@@ -1112,7 +1142,7 @@ const skyUniforms = {
   uTop: { value: new THREE.Color(0x1a5fc4) }, uMid: { value: new THREE.Color(0x8ec2f0) },
   uBottom: { value: new THREE.Color(0xdae6f2) }, uAlt: { value: 0 }, uAtmo: { value: 1 },
   uSunDir: { value: new THREE.Vector3(0.4, 0.7, 0.5).normalize() },
-  uSunTint: { value: new THREE.Color(1.0, 0.92, 0.8) }
+  uSunTint: { value: new THREE.Color(1.0, 0.92, 0.8) }, uHz: { value: new THREE.Color(0x8ec2f0) }
 };
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(9000, 32, 20),
@@ -1121,7 +1151,7 @@ const sky = new THREE.Mesh(
     vertexShader: `varying vec3 vDir;
       void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `
-      uniform vec3 uTop, uMid, uBottom, uSunDir, uSunTint;
+      uniform vec3 uTop, uMid, uBottom, uSunDir, uSunTint, uHz;
       uniform float uAlt, uAtmo;
       varying vec3 vDir;
       void main(){
@@ -1131,7 +1161,7 @@ const sky = new THREE.Mesh(
         vec3 c = mix(uBottom, uMid, smoothstep(0.0, 0.52, t));
         c = mix(c, uTop, smoothstep(0.52, 1.0, t));
         float horizon = exp(-abs(hy) * 6.0);
-        c += vec3(0.20, 0.42, 0.88) * horizon * uAtmo * (0.42 + uAlt * 1.7);
+        c += vec3(0.0) * horizon * uAtmo * (0.42 + uAlt * 1.7);
         float sd = max(dot(d, normalize(uSunDir)), 0.0);
         c += uSunTint * pow(sd, 6.0) * 0.20 * uAtmo;
         c += uSunTint * pow(sd, 110.0) * 0.95 * uAtmo;
@@ -1139,10 +1169,11 @@ const sky = new THREE.Mesh(
         c = mix(c, spaceCol, clamp(uAlt * uAtmo, 0.0, 1.0));
         // 地平线附近向海色过渡
 float seaBlend = 1.0 - smoothstep(0.0, 0.18, abs(hy));
-c = mix(c, vec3(0.0, 0.39, 1.0) * clamp(uSunDir.y * 2.2 + 0.3, 0.12, 1.0), seaBlend * 0.45);
+c = mix(c, vec3(0.0, 0.39, 1.0) * clamp(uSunDir.y * 2.2 + 0.3, 0.12, 1.0), seaBlend * 0.0);
         float below = smoothstep(0.08, -0.20, hy);
         vec3 earth = mix(vec3(0.30, 0.55, 0.98), vec3(0.62, 0.82, 1.0), smoothstep(-0.40, 0.04, hy));
         c = mix(c, earth, below * uAlt * 0.88 * uAtmo);
+        c = mix(c, uHz, (1.0 - smoothstep(0.0, 0.22, abs(hy))) * 0.95);
         gl_FragColor = vec4(c, 1.0);
       }`
   })
@@ -1225,7 +1256,8 @@ const FX = (() => {
         uTex: { value: tex },
         uPR: { value: Math.min(window.devicePixelRatio || 1, 2.0) },
         uHalfH: { value: innerHeight * 0.5 },
-        uProjF: { value: 1 / Math.tan(70 * Math.PI / 360) }
+        uProjF: { value: 1 / Math.tan(70 * Math.PI / 360) },
+        uCut: { value: 0 }   /* 体积云深度补写用：低于此透明度的像素丢弃(平时为0，不影响显示) */
       },
       vertexShader: `
         #include <common>
@@ -1261,12 +1293,14 @@ const FX = (() => {
         #include <common>
         #include <logdepthbuf_pars_fragment>
         uniform sampler2D uTex;
+        uniform float uCut;
         varying vec3  vC;
         varying float vA;
         varying vec2  vUV;
         void main(){
           #include <logdepthbuf_fragment>
           vec4 t = texture2D(uTex, vUV);
+          if (t.a * vA < uCut) discard;
           gl_FragColor = vec4(vC, t.a * vA);
         }`,
       transparent: true,
@@ -1279,6 +1313,7 @@ const FX = (() => {
     const mesh = new THREE.Mesh(quad, mat);
     mesh.frustumCulled = false;
     mesh.renderOrder = 500;
+    mesh.layers.enable(7);   /* 层7：仅供体积云深度补写使用 */
     scene.add(mesh);
     const state = new Array(max);
     for (let i = 0; i < max; i++) {
@@ -1680,7 +1715,20 @@ function emitTracer(x, y, z, dx, dy, dz) {
     for (let i = 0; i < firePool.max;  i++) firePool.state[i].on  = false;
   }
 
-  return { step, emitSmoke, emitFire, emitExplosion, emitSparks, emitBladeSmoke, emitCoreFire, emitForCraft, setBudget, reset, emitTracer };
+  /* 体积云用：开/关「只写深度」模式（火焰、烟雾、曳光、火花、爆炸都在这两个池里） */
+  function partDepth(on, cut) {
+    for (const p of [smokePool, firePool]) {
+      if (!p) continue;
+      p.mat.uniforms.uCut.value = on ? cut : 0;
+      p.mat.depthWrite = !!on; p.mat.colorWrite = !on;
+    }
+  }
+  function hasParticles() {
+    for (const p of [smokePool, firePool]) { if (!p) continue; for (let i = 0; i < p.max; i++) if (p.state[i].on) return true; }
+    return false;
+  }
+  function setHidden(h) { for (const p of [smokePool, firePool]) if (p) p.mesh.visible = !h; }
+  return { hasParticles, setHidden, partDepth, step, emitSmoke, emitFire, emitExplosion, emitSparks, emitBladeSmoke, emitCoreFire, emitForCraft, setBudget, reset, emitTracer };
 })();
 
 const starMat = new THREE.PointsMaterial({
@@ -1842,6 +1890,91 @@ const TERRAIN_STYLES = {
     water: 0x5cc8b8
   }
 };
+/* ===== 地形/水面材质增强（程序化细节） ===== */
+const TERRAIN_U = { uStyle: { value: 0 }, uTime: { value: 0 }, uWY: { value: 0 }, uKeep: { value: 1 } };
+const GLSL_NOISE = `
+float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(h21(i),h21(i+vec2(1.0,0.0)),f.x),mix(h21(i+vec2(0.0,1.0)),h21(i+vec2(1.0,1.0)),f.x),f.y);}
+`;
+const TERRAIN_FS = `{
+  vec2 p = vWP.xz;
+  float fd = mix(1.0 - smoothstep(120.0, 700.0, length(vWP - cameraPosition)), 1.0, uKeep);
+  float n1 = vn(p * 0.012), n2 = vn(p * 0.07);
+  float n3 = mix(0.5, vn(p * 0.45), fd), n4 = mix(0.5, vn(p * 2.6), fd);
+  float slope = 1.0 - clamp(vWN.y, 0.0, 1.0);
+  vec3 c = diffuseColor.rgb;
+  float lum = dot(c, vec3(0.3, 0.59, 0.11));
+  float snowy = smoothstep(0.55, 0.75, lum);
+  if (uStyle < 0.5) {
+    float green = smoothstep(0.02, 0.08, c.g - 0.5 * (c.r + c.b));
+    vec3 gc = c * (0.72 + 0.55 * (n3 * 0.55 + n4 * 0.45));
+    gc = mix(gc, gc * vec3(1.45, 1.15, 0.55), smoothstep(0.62, 0.86, n1) * 0.6);
+    gc *= 0.88 + 0.24 * n2;
+    vec3 sc = c * (0.90 + 0.2 * n4) * (0.95 + 0.08 * sin(p.x * 0.8 + n2 * 5.0));
+    c = mix(sc, gc, green);
+  } else if (uStyle < 1.5) {
+    c *= (0.93 + 0.10 * n3 + 0.05 * n4);
+    c *= mix(vec3(1.0), vec3(0.88, 0.94, 1.03), n2);
+  } else {
+    float rip = sin(dot(p, vec2(0.8, 0.6)) * 0.45 + n1 * 7.0) * 0.5 + 0.5;
+    c *= (0.84 + 0.24 * rip) * (0.90 + 0.18 * n4);
+    c = mix(c, c * vec3(0.8, 0.62, 0.5), smoothstep(0.6, 0.85, n2) * 0.5);
+  }
+  vec3 rc = (uStyle < 0.5 ? vec3(0.09, 0.08, 0.075) : (uStyle < 1.5 ? vec3(0.16, 0.17, 0.2) : vec3(0.14, 0.06, 0.03))) * (0.7 + 0.6 * n3);
+  float sn = uStyle < 0.5 ? snowy : 0.0;
+  c = mix(c, rc, smoothstep(0.30, 0.56, slope) * (1.0 - sn * 0.9) * 0.85);
+  float dep = uWY - vWP.y;
+  c = mix(c, vec3(0.0, 0.02, 0.07), (1.0 - exp(-max(dep, 0.0) * 0.25)) * 0.9);
+  c += vec3(0.05, 0.07, 0.07) * (1.0 - smoothstep(0.0, 1.5, dep)) * step(0.0, dep);
+  diffuseColor.rgb = c;
+}`;
+/* 岸边距离贴图：相机周围 1152m 的水深（渐进刷新），供水面按岸边距离调浪大小和画白边 */
+const SHORE = { N: 192, SIZE: 1152, ROWS: 12, buf: new Uint8Array(192 * 192), row: 192, cx: 1e9, cz: 1e9, bx: 0, bz: 0 };
+SHORE.tex = new THREE.DataTexture(new Uint8Array(192 * 192).fill(255), 192, 192, THREE.RedFormat);
+SHORE.tex.minFilter = SHORE.tex.magFilter = THREE.LinearFilter; SHORE.tex.unpackAlignment = 1; SHORE.tex.needsUpdate = true;
+const SHORE_U = { tShore: { value: SHORE.tex }, uWC: { value: new THREE.Vector3(1e9, 1e9, 1152) } };
+function shoreUpdate(px, pz) {
+  const N = SHORE.N, step = SHORE.SIZE / N, half = SHORE.SIZE / 2;
+  if (SHORE.row >= N) {
+    if (Math.hypot(px - SHORE.cx, pz - SHORE.cz) <= 96) return;
+    SHORE.bx = Math.round(px / 6) * 6; SHORE.bz = Math.round(pz / 6) * 6; SHORE.row = 0;
+  }
+  const end = Math.min(N, SHORE.row + SHORE.ROWS);
+  for (let j = SHORE.row; j < end; j++) for (let i = 0; i < N; i++) {
+    const d = WATER_Y - terrainHeight(SHORE.bx - half + (i + 0.5) * step, SHORE.bz - half + (j + 0.5) * step);
+    SHORE.buf[j * N + i] = (clamp(0.5 + d / 40, 0, 1) * 255) | 0;
+  }
+  SHORE.row = end;
+  if (end >= N) { SHORE.tex.image.data.set(SHORE.buf); SHORE.tex.needsUpdate = true; SHORE.cx = SHORE.bx; SHORE.cz = SHORE.bz; SHORE_U.uWC.value.set(SHORE.cx, SHORE.cz, SHORE.SIZE); }
+}
+function terrainPatch(sh) {
+  TERRAIN_U.uWY.value = WATER_Y;
+  sh.uniforms.uStyle = TERRAIN_U.uStyle; sh.uniforms.uTime = TERRAIN_U.uTime; sh.uniforms.uWY = TERRAIN_U.uWY; sh.uniforms.uKeep = TERRAIN_U.uKeep;
+  sh.vertexShader = 'varying vec3 vWP, vWN;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * objectNormal);');
+  sh.fragmentShader = 'uniform float uStyle, uTime, uWY, uKeep;\nvarying vec3 vWP, vWN;\n' + GLSL_NOISE + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n' + TERRAIN_FS);
+}
+function waterPatch(sh) {
+  sh.uniforms.uTime = TERRAIN_U.uTime; sh.uniforms.tShore = SHORE_U.tShore; sh.uniforms.uWC = SHORE_U.uWC;
+  sh.vertexShader = 'varying vec3 vWWP;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = `uniform float uTime;
+uniform sampler2D tShore; uniform vec3 uWC;
+varying vec3 vWWP;
+float shoreDepth(vec2 p){ vec2 uv=(p-uWC.xy)/uWC.z+0.5; float e=min(min(uv.x,1.0-uv.x),min(uv.y,1.0-uv.y)); if(e<0.0) return 40.0; float d=(texture2D(tShore,uv).r-0.5)*40.0; return mix(40.0,d,smoothstep(0.0,0.08,e)); }
+vec2 wgrad(vec2 p, float t){
+  vec2 g = vec2(0.0);
+  g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 0.9 + t * 1.3) * 0.9;
+  g += vec2(-0.5, 0.85) * cos(dot(p, vec2(-0.5, 0.85)) * 1.7 + t * 1.9) * 0.6;
+  g += vec2(0.95, -0.3) * cos(dot(p, vec2(0.95, -0.3)) * 3.1 + t * 2.6) * 0.35;
+  g += vec2(-0.2, -0.97) * cos(dot(p, vec2(-0.2, -0.97)) * 6.3 + t * 3.4) * 0.2;
+  return g;
+}
+` + sh.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  { float sd = shoreDepth(vWWP.xz), fr = smoothstep(0.0, 22.0, sd);
+    float fo = 1.0 - smoothstep(0.35, 0.55, sd);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), fo); diffuseColor.a = mix(diffuseColor.a, 0.95, fo);
+    vec2 g = wgrad(vWWP.xz * mix(1.5, 0.6, fr), uTime) * 0.045 * mix(0.3, 2.0, fr) * (1.0 - smoothstep(200.0, 2200.0, length(vWWP - cameraPosition)));
+    normal = normalize((viewMatrix * vec4(normalize(vec3(-g.x, 1.0, -g.y)), 0.0)).xyz) * faceDirection; }`);
+}
 const TREE_STYLES = {
   hill:   { h: [0.26, 0.32], s: [0.36, 0.60], l: [0.14, 0.28] },
   snow:   { h: [0.30, 0.38], s: [0.06, 0.18], l: [0.55, 0.75] },
@@ -2001,6 +2134,7 @@ function initLOD() {
       polygonOffset: true, polygonOffsetFactor: 0,
       polygonOffsetUnits: -2 * (LOD_LV - k)
     });
+    mat.onBeforeCompile = terrainPatch;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false;
     mesh.receiveShadow = k <= 4;
@@ -2063,7 +2197,7 @@ const waterMesh = (() => {
   const waterMat = new THREE.MeshPhongMaterial({
     color: 0x0b57b8, specular: 0x2c3e50, shininess: 55,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.5,
     depthWrite: true,
     depthTest: true,
     side: THREE.DoubleSide,
@@ -2071,6 +2205,7 @@ const waterMesh = (() => {
     polygonOffsetFactor: -8,
     polygonOffsetUnits: -8
   });
+  waterMat.onBeforeCompile = waterPatch;
   const m = new THREE.Mesh(waterGeo, waterMat);
   m.position.y = WATER_Y;
   m.renderOrder = 10;
@@ -2459,35 +2594,67 @@ function stepTreeFall(dt) {
 /* =====================================================================
    8. 云层（只保留高空两层，删除低空厚云幕）
    ===================================================================== */
+/* ===== 云配置（可调） ===== */
+const CLOUD_CFG = {
+  /* 平面云(柏林噪声)：v.cloud → 剪裁阈值；阈值越低云越多。晴:零星 多云:大块有空隙 阴天:几乎铺满 */
+  THR: [[0, 1.2], [0.12, 0.74], [0.62, 0.50], [0.70, 0.43], [1.0, 0.16]],
+  BASE_CELLS: 4, OCT: 5, GAIN: 0.5, CONTRAST: 1.05,
+  /* 体积云：v.cloud → 覆盖度 z 值（越大越稀） */
+  Z: [[0, 9.0], [0.12, 1.45], [0.62, 0.15], [0.70, -0.1], [1.0, -1.6]],
+  RES: 0.5,            // 体积云渲染分辨率比例（卡就调小，如0.4）
+  STEPS: 80, STEP0: 48, STEP_RANGE: 1000, MAXDIST: 16000,
+  VOL_NEAR: 9000, VOL_FAR: 16000,   // 体积云：3500米内完整，到7000米渐隐；平面云反向渐显（远处自动过渡）
+  LSTEPS: 4, LSTEP0: 80,
+  BASE_CLEAR: 1100, TOP_CLEAR: 1900,   // 晴天云底/云顶
+  BASE_STORM: 600,  TOP_STORM: 3600,   // 最糟天气云底/云顶（越糟越厚）
+  TILE: 4200, SIGMA: 0.018, GAIN_D: 4.0, ERODE: 0.30,
+  FADE: 8000, TEX: 48
+};
+const cfgInterp = (t, x) => {
+  if (x <= t[0][0]) return t[0][1];
+  for (let i = 1; i < t.length; i++) if (x <= t[i][0]) { const k = (x - t[i - 1][0]) / (t[i][0] - t[i - 1][0]); return t[i - 1][1] + (t[i][1] - t[i - 1][1]) * k; }
+  return t[t.length - 1][1];
+};
+const CLOUD_THR = { value: 0.74 };
+const CLOUD_VOLR = { value: new THREE.Vector2(CLOUD_CFG.VOL_NEAR, CLOUD_CFG.VOL_FAR) }, CLOUD_VOLON = { value: 0 };
+const VOL = { mat: null, comp: null, noise: null, depthRT: null, cloudRT: null, depthMat: null, w: 0, h: 0, base: 1100, top: 1900, mu: 0.5, sd: 0.15, hide: [], gl: [], maskRT: null, maskMat: null, scan: 0, broken: false };
+const volOn = () => !!settings.volClouds && !VOL.broken;
+/* 体积云补充配置 */
+const VOL_CFG = {
+  partCut: 0.05   // 【粒子参与云前后分层的透明度阈值】0~1；低于此值的极淡边缘不分层(会被云直接盖住)
+};
+/* 平面云：无缝柏林 fBm，alpha=噪声值，覆盖率由阈值决定（WX 里按天气调） */
 function makeCloudTexture(res, seed) {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = res;
-  const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, res, res);
   let s = seed;
   const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  for (let i = 0; i < 1500; i++) {
-    const x = rnd() * res, y = rnd() * res;
-    const r = res * (0.010 + rnd() * 0.070);
-    const a = 0.030 + rnd() * 0.11;
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, 'rgba(255,255,255,' + a + ')');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  const val = new Float32Array(res * res);
+  let norm = 0, amp = 1;
+  for (let o = 0; o < CLOUD_CFG.OCT; o++) {
+    const P = CLOUD_CFG.BASE_CELLS << o, gx = new Float32Array(P * P), gy = new Float32Array(P * P);
+    for (let i = 0; i < P * P; i++) { const a = rnd() * 6.2831853; gx[i] = Math.cos(a); gy[i] = Math.sin(a); }
+    for (let y = 0; y < res; y++) {
+      const fy = y / res * P, iy = Math.floor(fy), ty = fy - iy, wy = ty * ty * ty * (ty * (ty * 6 - 15) + 10);
+      const y0 = (iy % P) * P, y1 = ((iy + 1) % P) * P;
+      for (let x = 0; x < res; x++) {
+        const fx = x / res * P, ix = Math.floor(fx), tx = fx - ix, wx = tx * tx * tx * (tx * (tx * 6 - 15) + 10);
+        const x0 = ix % P, x1 = (ix + 1) % P;
+        const n00 = gx[y0 + x0] * tx + gy[y0 + x0] * ty, n10 = gx[y0 + x1] * (tx - 1) + gy[y0 + x1] * ty;
+        const n01 = gx[y1 + x0] * tx + gy[y1 + x0] * (ty - 1), n11 = gx[y1 + x1] * (tx - 1) + gy[y1 + x1] * (ty - 1);
+        const a0 = n00 + (n10 - n00) * wx, a1 = n01 + (n11 - n01) * wx;
+        val[y * res + x] += amp * (a0 + (a1 - a0) * wy);
+      }
+    }
+    norm += amp; amp *= CLOUD_CFG.GAIN;
   }
-  const img = ctx.getImageData(0, 0, res, res);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    let v = d[i] / 255;
-    v = (v - 0.30) * 2.6; v = v < 0 ? 0 : (v > 1 ? 1 : v); v = Math.pow(v, 0.82);
-    d[i] = d[i + 1] = d[i + 2] = 255;
-    d[i + 3] = Math.floor(255 * v);
+  const d = new Uint8Array(res * res * 4);
+  for (let i = 0; i < res * res; i++) {
+    const n = Math.min(1, Math.max(0, 0.5 + val[i] / norm * CLOUD_CFG.CONTRAST));
+    d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 255; d[i * 4 + 3] = (n * 255) | 0;
   }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(cv);
+  const tex = new THREE.DataTexture(d, res, res, THREE.RGBAFormat);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true; tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true;
   return tex;
 }
 const cloudLayers = [];
@@ -2504,6 +2671,13 @@ const cloudLayers = [];
       depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.06, color: 0xffffff,
       fog: false
     });
+    mat.onBeforeCompile = sh => {
+      sh.uniforms.uCloudThr = CLOUD_THR; sh.uniforms.uVolR = CLOUD_VOLR; sh.uniforms.uVolOn = CLOUD_VOLON;
+      sh.vertexShader = 'varying vec2 vLoc;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vLoc = position.xy;');
+      sh.fragmentShader = 'uniform float uCloudThr, uVolOn; uniform vec2 uVolR; varying vec2 vLoc;\n' + sh.fragmentShader
+        .replace('#include <map_fragment>', '#include <map_fragment>\n diffuseColor.a = opacity * smoothstep(uCloudThr, uCloudThr + 0.10, sampledDiffuseColor.a) * mix(1.0, smoothstep(uVolR.x, uVolR.y, length(vLoc)), uVolOn);')
+        .replace('#include <alphatest_fragment>', 'if (diffuseColor.a < 0.004) discard;');
+    };
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(c.size, c.size), mat);
     mesh.rotation.x = -Math.PI / 2; mesh.position.y = c.y;
     mesh.renderOrder = -1; mesh.castShadow = true; mesh.receiveShadow = false;
@@ -4036,7 +4210,7 @@ function resetHeli() {
   H.pos.set(0, terrainHeight(0, 0) + SKID_H+1.3, 0);
   H.vel.set(0, 0, 0); H.quat.identity(); H.avel.set(0, 0, 0);
   H.coll = 0; H.rho = 1;
-  H.onGround = true; H.crashed = false; H.crashTimer = 0; H.vortex = false;
+  H.onGround = true; H.crashed = false; H.crashTimer = 0; H.vortex = false; H.struck = false;
   H.fire = 0; H.fireT = 0; H.fireCool = 0; H.cumFireRolled = 0;
   engineOn = false; rotorSpool = 0;
   rotorAngle = 0; tailAngle = 0;
@@ -4574,6 +4748,11 @@ const ATT_KP = 12.0;
 const ATT_KD = 2 * Math.sqrt(ATT_KP) * 1.05;
 
 function physics(dt, t) {
+  if (H.struck) { /* 被雷击：引擎失效、操控全失、翻滚失控（无提示） */
+    const tt = performance.now() * 0.001, K = LIGHTNING_CFG.TUMBLE;
+    engineOn = false; input.lx = input.ly = input.rx = input.ry = 0;
+    H.avel.x += Math.sin(tt * 1.9) * K * dt; H.avel.z += Math.cos(tt * 1.3) * K * dt; H.avel.y += K * 0.6 * dt;
+  }
 if (!toastMute && assistLocked && hullDamage < ASSIST_DMG_THRESHOLD && rotorDamage < CONTROL_LOSS_THRESHOLD) {
   assistLocked = false;
 }
@@ -4788,10 +4967,31 @@ function achUnlock(id) {
   achQueue.push(a); achPump(); achRender();
   if (id !== 'expert' && ACH_LIST.every(x => x.id === 'expert' || achDone[x.id])) achUnlock('expert');
 }
+/* ===== 隐藏成就（与普通成就完全隔离：独立列表/存档，不参与「完美主义者」判定） ===== */
+const ACH_HIDDEN = [
+  { id: 'beast', n: '性能怪兽', d: '画质拉满是最棒的！' },
+  { id: 'comp',  n: '为性能妥协', d: '为了帧率…做点妥协吧' }
+];
+const ACH_HKEY = 'heli_ach_hidden_v1';
+let achHDone = {};
+try { achHDone = JSON.parse(localStorage.getItem(ACH_HKEY) || '{}') || {}; } catch (e) { achHDone = {}; }
+function achHUnlock(id) {
+  if (achHDone[id]) return;
+  const a = ACH_HIDDEN.find(x => x.id === id); if (!a) return;
+  achHDone[id] = 1;
+  try { localStorage.setItem(ACH_HKEY, JSON.stringify(achHDone)); } catch (e) {}
+  achQueue.push({ n: a.n, d: a.d, hidden: true }); achPump(); achRender();
+}
+function achHCheck() {
+  const s = settings, rs = Number(s.renderScale);
+  if (!achHDone.beast && s.quality === 'high' && rs >= 0.999 && s.view === 'far' && s.atmosphere && s.clouds && s.cloudShadow && s.volClouds && s.farDetail && s.shadows && s.bloom && s.godrays && s.fxaa) achHUnlock('beast');
+  if (!achHDone.comp && s.quality === 'low' && rs <= 0.46 && s.view === 'near' && !s.atmosphere && !s.clouds && !s.cloudShadow && !s.volClouds && !s.farDetail && !s.shadows && !s.bloom && !s.godrays && !s.fxaa) achHUnlock('comp');
+}
 function achPump() {
   if (achBusy || !achQueue.length) return;
   const a = achQueue.shift(), el = document.getElementById('ach-toast'); if (!el) return;
   achBusy = true;
+  el.querySelector('.t1').textContent = a.hidden ? '隐藏成就解锁' : '成就解锁';
   el.querySelector('.t2').textContent = a.n;
   el.querySelector('.t3').textContent = a.d;
   el.classList.add('show');
@@ -4806,11 +5006,16 @@ function achRender() {
     return '<div class="arow' + (ok ? ' done' : '') + '"><div class="ai">✓</div><div><div class="an">' + a.n + '</div><div class="ad">' + a.d + '</div></div></div>';
   }).join('');
   prog.textContent = '已完成 ' + n + ' / ' + ACH_LIST.length;
+  list.innerHTML += '<div class="aprog" style="margin:14px 0 8px;">隐 藏 成 就</div>' + ACH_HIDDEN.map(a => {
+    const ok = !!achHDone[a.id];
+    return '<div class="arow' + (ok ? ' done' : '') + '"><div class="ai">' + (ok ? '✓' : '?') + '</div><div><div class="an">' + (ok ? a.n : '？？？') + '</div><div class="ad">' + (ok ? a.d : '尚未发现') + '</div></div></div>';
+  }).join('');
 }
 function achTick() {
   if (++achFrame % 6) return;
   try {
     if (!H) return;
+    achHCheck();
     if (!achDone.view && H.pos.y >= 3000 && !H.crashed) achUnlock('view');
     const dead = H.crashed || shattered;
     if (dead) {
@@ -5327,6 +5532,38 @@ let bgm = null, bgmStarted = false;
 let bgmFadeTimer = null;
 let audioUnlocked = false;
 let bgmWant = '', bgmGuardN = 0;
+
+/* ===== 任务模式专属音乐 rw.mp3：循环播放，与菜单音乐淡入淡出过渡 ===== */
+const MUSIC_CFG = { file: 'rw.mp3', vol: 0.45, fadeSec: 1.6 };   // 【任务音乐】文件名 / 音量 / 过渡时长(秒)
+let rwAudio = null, rwPrevWant = false, rwLastT = 0;
+function missionMusicWanted() {
+  const M = window.__MS; if (!M) return false;
+  const shown = id => { const e = document.getElementById(id); return !!(e && e.classList.contains('show')); };
+  /* 任务进行中(含暂停/机库/结算) · 任务页面打开 · 为任务选地图 · 正在退出任务 */
+  return !!(M._mm || M.inMission() || shown('ms-page') || shown('ms-res') || (shown('mapselect') && mapSelectPurpose === 'mission'));
+}
+function musicTick() {
+  const now = performance.now(), dt = Math.min(0.2, (now - rwLastT) / 1000); rwLastT = now;
+  if (!audioUnlocked) return;
+  if (document.hidden) { if (rwAudio && !rwAudio.paused) rwAudio.pause(); return; }
+  const want = missionMusicWanted(), step = MUSIC_CFG.vol * dt / MUSIC_CFG.fadeSec;
+  if (want) {
+    if (!rwAudio) { rwAudio = new Audio(MUSIC_CFG.file); rwAudio.loop = true; rwAudio.volume = 0; }
+    if (rwAudio.paused) rwAudio.play().catch(() => {});
+    rwAudio.volume = Math.min(MUSIC_CFG.vol, rwAudio.volume + step);
+    if (bgm && !bgm.paused) {   /* 菜单/机库音乐淡出 */
+      clearInterval(bgmFadeTimer); bgmWant = 'out';
+      bgm.volume = Math.max(0, bgm.volume - step);
+      if (bgm.volume <= 0.001) bgm.pause();
+    }
+  } else if (rwAudio && !rwAudio.paused) {
+    rwAudio.volume = Math.max(0, rwAudio.volume - step);
+    if (rwAudio.volume <= 0.001) { rwAudio.pause(); rwAudio.currentTime = 0; }
+  }
+  if (rwPrevWant && !want && (inMenu || hangarOpen)) fadeInBGM(MUSIC_CFG.vol, MUSIC_CFG.fadeSec);   /* 离开任务模式 → 菜单音乐淡入 */
+  rwPrevWant = want;
+}
+setInterval(musicTick, 50);
 function bgmGuard() {
   if (++bgmGuardN % 30) return;
   if (!bgm || bgm.paused || inMenu || hangarOpen) return;
@@ -5335,9 +5572,9 @@ function bgmGuard() {
 document.addEventListener('visibilitychange', () => {
   if (!bgm) return;
   if (document.hidden) bgm.pause();
-  else if (bgmStarted && (inMenu || hangarOpen)) bgm.play().catch(() => {});
+  else if (bgmStarted && (inMenu || hangarOpen) && !missionMusicWanted()) bgm.play().catch(() => {});
 });
-window.addEventListener('pagehide', () => { if (bgm) bgm.pause(); });
+window.addEventListener('pagehide', () => { if (bgm) bgm.pause(); if (rwAudio) rwAudio.pause(); });
 
 function createBGMIfNeed() {
     if (!bgm) {
@@ -5349,6 +5586,7 @@ function createBGMIfNeed() {
 
 function fadeInBGM(targetVol = 0.45, durationSec = 1.8) {
     if (!audioUnlocked) return;
+    if (missionMusicWanted()) return;   /* 任务模式由 rw.mp3 接管 */
     createBGMIfNeed();
     clearInterval(bgmFadeTimer);
     bgmStarted = true; bgmWant = 'in';
@@ -5370,6 +5608,7 @@ function fadeInBGM(targetVol = 0.45, durationSec = 1.8) {
 
 function fadeOutBGM(durationSec = 1) {
     if (!bgm) return;
+    if (missionMusicWanted()) return;
     bgmWant = 'out';
     clearInterval(bgmFadeTimer);
 
@@ -5470,9 +5709,14 @@ function updateHUD(dt) {
    ===================================================================== */
 const sunDirVec = new THREE.Vector3();
 function updateDayNight(dt) {
-  if (settings.dayNight && settings.timeOfDay === 'auto') {
-    dayTime = (dayTime + dt / DAY_LENGTH) % 1;
+  if (settings.syncReal) {
+    const n = new Date();   /* 本地时间 = 系统时区 */
+    dayTime = (n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds() + n.getMilliseconds() / 1000) / 86400;
+  } else if (settings.dayNight && settings.timeOfDay === 'auto' && !timeDragging) {
+    const L = clamp(+settings.dayLenSec || TIME_CFG.defDaySec, TIME_CFG.minDaySec, TIME_CFG.maxDaySec);
+    dayTime = (dayTime + dt / L) % 1;
   }
+  if (typeof timeUIRefresh === 'function') timeUIRefresh();
   const theta = (dayTime - 0.25) * Math.PI * 2;
   sunElev = Math.sin(theta);
   sunDirVec.set(Math.cos(theta) * 0.90, sunElev, 0.34).normalize();
@@ -5519,7 +5763,7 @@ function applyQualityToMats(mats) {
   mats.glass.specular.setHex(settings.quality === 'high' ? 0xffffff : 0x555555);
 }
 function applySettings() {
-if (settings.timeOfDay !== 'auto') {
+if (settings.timeOfDay !== 'auto' && !settings.syncReal) {
   const T = {
     dawn:    0.22,
     morning: 0.32,
@@ -5558,7 +5802,7 @@ if (settings.timeOfDay !== 'auto') {
   const cShadow = settings.cloudShadow && settings.clouds;
   cloudSunNear.castShadow = cShadow;
   cloudSunFar.castShadow = cShadow && settings.quality !== 'low';
-  for (const cl of cloudLayers) cl.mesh.visible = settings.clouds;
+  for (const cl of cloudLayers) cl.mesh.visible = settings.clouds && !volOn();
   camera.far = v.camFar;
   camera.updateProjectionMatrix();
 for (let k = 0; k < LOD_LV; k++) lodBuild(LOD[k]);
@@ -8130,13 +8374,13 @@ let acc = 0, panelTimer = 1;
 const STEP = 1 / 120;
 
 const WX_DEF = {
-  clear:  { n:'晴天',   cloud:0.12, dark:0.00, fog:1.00, rain:0,    snow:0,    sand:0,    wind:0.0, gust:0.0, sky:0,        tint:0 },
-  partly: { n:'多云',   cloud:0.62, dark:0.12, fog:0.95, rain:0,    snow:0,    sand:0,    wind:0.2, gust:0.1, sky:0x9aa8b8, tint:0.20 },
-  overcast:{n:'阴天',   cloud:1.00, dark:0.50, fog:0.70, rain:0,    snow:0,    sand:0,    wind:0.3, gust:0.15,sky:0x7c8590, tint:0.60 },
+  clear:  { n:'晴天',   cloud:0.00, dark:0.00, fog:1.00, rain:0,    snow:0,    sand:0,    wind:0.0, gust:0.0, sky:0,        tint:0 },
+  partly: { n:'多云',   cloud:0.62, dark:0.12, fog:0.85, rain:0,    snow:0,    sand:0,    wind:0.2, gust:0.1, sky:0x9aa8b8, tint:0.20 },
+  overcast:{n:'阴天',   cloud:1.00, dark:0.50, fog:0.50, rain:0,    snow:0,    sand:0,    wind:0.3, gust:0.15,sky:0x7c8590, tint:0.60 },
   fog:    { n:'大雾',   cloud:0.70, dark:0.30, fog:0.10, rain:0,    snow:0,    sand:0,    wind:0.1, gust:0.0, sky:0xaeb6bc, tint:0.75 },
-  rain:   { n:'小雨',   cloud:1.00, dark:0.58, fog:0.55, rain:0.45, snow:0,    sand:0,    wind:0.4, gust:0.2, sky:0x6c7680, tint:0.68 },
-  storm:  { n:'暴雨',   cloud:1.00, dark:0.80, fog:0.32, rain:1.00, snow:0,    sand:0,    wind:0.8, gust:0.5, sky:0x4a525c, tint:0.85 },
-  thunder:{ n:'雷暴',   cloud:1.00, dark:0.90, fog:0.30, rain:1.00, snow:0,    sand:0,    wind:0.9, gust:0.7, sky:0x3c434d, tint:0.90, light:1 },
+  rain:   { n:'小雨',   cloud:1.00, dark:0.58, fog:0.42, rain:0.45, snow:0,    sand:0,    wind:0.4, gust:0.2, sky:0x6c7680, tint:0.68 },
+  storm:  { n:'暴雨',   cloud:1.00, dark:0.80, fog:0.25, rain:1.00, snow:0,    sand:0,    wind:0.8, gust:0.5, sky:0x4a525c, tint:0.85 },
+  thunder:{ n:'雷暴',   cloud:1.00, dark:0.90, fog:0.22, rain:1.00, snow:0,    sand:0,    wind:0.9, gust:0.7, sky:0x3c434d, tint:0.90, light:1 },
   snow:   { n:'小雪',   cloud:1.00, dark:0.32, fog:0.50, rain:0,    snow:0.45, sand:0,    wind:0.3, gust:0.1, sky:0xb4bcc6, tint:0.68 },
   heavysnow:{n:'大雪',  cloud:1.00, dark:0.42, fog:0.30, rain:0,    snow:1.00, sand:0,    wind:0.4, gust:0.2, sky:0xc0c8d0, tint:0.78 },
   blizzard:{ n:'雪暴',  cloud:1.00, dark:0.50, fog:0.10, rain:0,    snow:1.00, sand:0,    wind:1.3, gust:0.9, sky:0xd0d6dc, tint:0.92 },
@@ -8152,10 +8396,101 @@ const WX_WEIGHT = {
   snow:   { clear:3, partly:3, overcast:3, fog:1, snow:3, heavysnow:1.5, blizzard:1 },
   desert: { clear:7, partly:2.5, overcast:1, sandstorm:1.8 }
 };
+/* =====================================================================
+   雷电：云内闪电 / 劈到地面的闪电；路径离直升机 ≤ HIT_R 米才判定命中
+   命中后：冒烟(无火)、引擎失效、操控完全失灵（无任何提示）
+   ===================================================================== */
+const LIGHTNING_CFG = {
+  GROUND_CHANCE: 0.55,  // 每次闪光里劈到地面的概率（其余为云内闪电）
+  AIM_CHANCE: 0.12,     // 地闪里直接劈向直升机的概率（想更容易/更难中就改这里）
+  HIT_R: 1.0,           // 命中判定：闪电路径与直升机最近距离 ≤ 此值(米)
+  RANGE: 1400,          // 非瞄准地闪的随机落点范围(米)
+  WIDTH: 2.2,           // 闪电基础宽度(米)，远处自动加宽
+  LIFE: 0.45,           // 地闪可见时长(秒)
+  TUMBLE: 0.9,          // 命中后翻滚扰动强度
+  SMOKE_RATE: 3         // 命中后每帧冒烟粒子数
+};
+const LTN = (() => {
+  const C = LIGHTNING_CFG, S = { flash: 0, pos: new THREE.Vector3() };
+  const mat = new THREE.MeshBasicMaterial({ color: 0xcfe0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false });
+  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat); mesh.frustumCulled = false; mesh.visible = false; mesh.renderOrder = 5; scene.add(mesh);
+  let life = 0;
+  const T = new THREE.Vector3(), V = new THREE.Vector3(), Sd = new THREE.Vector3(), AB = new THREE.Vector3(), AP = new THREE.Vector3();
+  function bolt(a, b) {
+    let pts = [a.clone(), b.clone()], amp = a.distanceTo(b) * 0.12;
+    for (let it = 0; it < 6; it++) {
+      const np = [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        np.push(pts[i]);
+        const m = pts[i].clone().add(pts[i + 1]).multiplyScalar(0.5);
+        m.x += (Math.random() - 0.5) * amp; m.z += (Math.random() - 0.5) * amp; m.y += (Math.random() - 0.5) * amp * 0.3; np.push(m);
+      }
+      np.push(pts[pts.length - 1]); pts = np; amp *= 0.52;
+    }
+    return pts;
+  }
+  function segDist(p, a, b) {
+    AB.subVectors(b, a); AP.subVectors(p, a);
+    const k = clamp(AP.dot(AB) / Math.max(1e-6, AB.dot(AB)), 0, 1);
+    return AP.sub(AB.multiplyScalar(k)).length();
+  }
+  function build(lines) {
+    let nv = 0, ni = 0;
+    for (const L of lines) { nv += L.pts.length * 2; ni += (L.pts.length - 1) * 6; }
+    const pos = new Float32Array(nv * 3), idx = new Uint32Array(ni); let vo = 0, io = 0;
+    for (const L of lines) {
+      const n = L.pts.length;
+      for (let i = 0; i < n; i++) {
+        const p = L.pts[i];
+        T.copy(L.pts[Math.min(i + 1, n - 1)]).sub(L.pts[Math.max(i - 1, 0)]); V.copy(p).sub(camera.position);
+        Sd.crossVectors(T, V).normalize();
+        const w = Math.max(L.w, V.length() * 0.0035);
+        const o = (vo + i * 2) * 3;
+        pos[o] = p.x - Sd.x * w; pos[o + 1] = p.y - Sd.y * w; pos[o + 2] = p.z - Sd.z * w;
+        pos[o + 3] = p.x + Sd.x * w; pos[o + 4] = p.y + Sd.y * w; pos[o + 5] = p.z + Sd.z * w;
+      }
+      for (let i = 0; i < n - 1; i++) { const a = vo + i * 2; idx[io++] = a; idx[io++] = a + 1; idx[io++] = a + 2; idx[io++] = a + 1; idx[io++] = a + 3; idx[io++] = a + 2; }
+      vo += n * 2;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(new THREE.BufferAttribute(idx, 1));
+    mesh.geometry.dispose(); mesh.geometry = g;
+  }
+  function onFlash() {
+    const vi = volOn(), bY = vi ? VOL.base : 850, tY = vi ? VOL.top : 900;
+    S.flash = 1;
+    if (Math.random() < C.GROUND_CHANCE) {
+      const aim = Math.random() < C.AIM_CHANCE, end = new THREE.Vector3();
+      if (aim) end.copy(H.pos);
+      else { const a = Math.random() * 6.2832, r = 150 + Math.random() * C.RANGE; end.set(H.pos.x + Math.cos(a) * r, 0, H.pos.z + Math.sin(a) * r); end.y = terrainHeight(end.x, end.z); }
+      const sy = Math.max(vi ? bY + (tY - bY) * 0.5 : 850, end.y + 200);
+      const start = new THREE.Vector3(end.x + (Math.random() - 0.5) * 300, sy, end.z + (Math.random() - 0.5) * 300);
+      const pts = bolt(start, end), lines = [{ pts, w: C.WIDTH }];
+      for (let k = 0; k < 3; k++) {
+        const i = 4 + ((Math.random() * (pts.length - 12)) | 0), b = pts[i], bp = [b.clone()], dir = new THREE.Vector3((Math.random() - 0.5), -0.6, (Math.random() - 0.5)).normalize();
+        for (let j = 1; j < 8; j++) bp.push(bp[j - 1].clone().addScaledVector(dir, 30).add(new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 14)));
+        lines.push({ pts: bp, w: C.WIDTH * 0.45 });
+      }
+      build(lines); life = C.LIFE; mesh.visible = true; S.pos.copy(start);
+      if (!H.crashed && !H.struck) for (let i = 0; i < pts.length - 1; i++) if (segDist(H.pos, pts[i], pts[i + 1]) <= C.HIT_R) { H.struck = true; break; }
+    } else {
+      S.pos.set(H.pos.x + (Math.random() - 0.5) * 2400, bY + (tY - bY) * (0.3 + Math.random() * 0.5), H.pos.z + (Math.random() - 0.5) * 2400);
+    }
+  }
+  const _ltnV = new THREE.Vector3();
+  function update(dt) {
+    S.flash *= Math.exp(-dt * 6);
+    if (life > 0) { life -= dt; mat.opacity = life > 0 ? clamp(life / C.LIFE, 0, 1) * (Math.random() > 0.3 ? 1 : 0.35) : 0; if (life <= 0) mesh.visible = false; }
+    if (H.struck) for (let i = 0; i < C.SMOKE_RATE; i++)
+      FX.emitSmoke(...(() => { if (shattered && AC && AC.fuselage) { AC.fuselage.getWorldPosition(_ltnV); return [_ltnV.x, _ltnV.y + 1.2, _ltnV.z]; } return [H.pos.x, H.pos.y + 1.2, H.pos.z]; })(), { vx: H.vel.x * 0.3, vy: 2.2, vz: H.vel.z * 0.3, spread: 1.2, vspread: 1.0, life: 3.2, s0: 0.7, s1: 4.5, gray: 0.12, jx: 0.5, jz: 0.5 });
+  }
+  return { S, onFlash, update };
+})();
+
 const WX = (() => {
   const W = {
     type: 'clear', cx: 0, cz: 0,
-    v: { cloud:0.12, dark:0, fog:1, rain:0, snow:0, sand:0, wind:0, gust:0, tint:0 },
+    v: { cloud:0.00, dark:0, fog:1, rain:0, snow:0, sand:0, wind:0, gust:0, tint:0 },
     skyCol: new THREE.Color(0x8ec2f0), tgtSky: new THREE.Color(0x8ec2f0),
     nextTimer: 90, flash: 0, flashTimer: 6
   };
@@ -8296,6 +8631,8 @@ const WX = (() => {
   let tagT = 0, phase = 0;
   W.update = function (dt, tNow) {
     if (!applied) window.__wxApply();
+    TERRAIN_U.uTime.value = tNow; TERRAIN_U.uStyle.value = settings.terrainStyle === 'snow' ? 1 : (settings.terrainStyle === 'desert' ? 2 : 0);
+    TERRAIN_U.uKeep.value = settings.farDetail ? 1 : 0; shoreUpdate(camera.position.x, camera.position.z);
     const tg = (settings.wxType !== 'auto' && lists().includes(settings.wxType)) ? settings.wxType : 'auto';
     if (tg !== lastSel) { lastSel = tg; W.set(tg === 'auto' ? pickAuto() : tg); }
     else if (tg === 'auto') { W.nextTimer -= dt; if (W.nextTimer <= 0) W.set(pickAuto()); }
@@ -8314,22 +8651,34 @@ const WX = (() => {
       for (const u of ['uTop', 'uMid', 'uBottom']) skyUniforms[u].value.lerp(_c, tint * (u === 'uTop' ? 0.85 : 1));
       scene.fog.color.lerp(_c, tint);
     }
+    /* ---- 雾/地平线颜色：随天气与群系变化，与飞行高度无关 ---- */
+    {
+      const st = settings.terrainStyle, s1 = clamp(dark / 0.5, 0, 1), s2 = clamp((dark - 0.5) / 0.4, 0, 1), sf = clamp(sunElev * 2.2 + 0.3, 0.12, 1);
+      let r, g, b, k;
+      if (st === 'snow') { r = lerp(0.80, 0.93, s1); g = lerp(0.88, 0.95, s1); b = lerp(1.0, 0.98, s1); k = 1 - 0.18 * s2; }
+      else if (st === 'desert') { r = lerp(0.86, 0.78, s1); g = lerp(0.68, 0.60, s1); b = lerp(0.40, 0.32, s1); k = 1 - 0.55 * s2; }
+      else { r = lerp(0.0, 0.52, s1); g = lerp(0.39, 0.54, s1); b = lerp(1.0, 0.58, s1); k = 1 - 0.94 * s2; }
+      r *= k * sf; g *= k * sf; b *= k * sf;
+      skyUniforms.uHz.value.setRGB(r, g, b);
+      scene.fog.color.setRGB(r, g, b, THREE.SRGBColorSpace);
+    }
 
     /* ---- 云（只剩两层高空云） ---- */
     const wc = W.field(_wTmp, camera.position.x, camera.position.y, camera.position.z, tNow);
     W.cx += wc.x * dt * 3; W.cz += wc.z * dt * 3;
     const showC = settings.clouds;
     for (const cl of cloudLayers) {
-      const cov = clamp(v.cloud * 1.08, 0, 1);
+      const thr = cfgInterp(CLOUD_CFG.THR, v.cloud);
+      CLOUD_THR.value = thr; CLOUD_VOLON.value = volOn() ? 1 : 0;
       cl.mat.opacity = 0.9;
-      cl.mat.alphaTest = lerp(0.80, 0.05, cov);
+      cl.mat.alphaTest = thr;
       const sh = 1 - dark * 0.72;
       cl.mat.color.r *= sh; cl.mat.color.g *= sh; cl.mat.color.b *= sh;
       if (tint > 0.01) cl.mat.color.lerp(_c, tint * 0.55);
-      cl.mesh.visible = showC;
+      cl.mesh.visible = showC && !volOn();
     }
     /* 闪电 */
-    if (d.light) { W.flashTimer -= dt; if (W.flashTimer <= 0) { W.flash = 1; W.flashTimer = 3 + Math.random() * 9; } }
+    if (d.light) { W.flashTimer -= dt; if (W.flashTimer <= 0) { W.flash = 1; W.flashTimer = 3 + Math.random() * 9; LTN.onFlash(); } }
     if (W.flash > 0.01) {
       W.flash *= Math.exp(-dt * 9);
       const fl = W.flash * (Math.random() > 0.35 ? 1 : 0.4);
@@ -8616,9 +8965,299 @@ function fxWarn(m) {
   _fxToast.textContent = m; _fxToast.style.display = 'block';
   setTimeout(() => { _fxToast.style.display = 'none'; }, 9000);
 }
+/* =====================================================================
+   真体积云（3D 噪声 raymarch，可穿入云中；读场景深度被地形/机体遮挡）
+   流程：主渲染 → 深度预渲染(半分辨率) → 云 raymarch(半分辨率) → 叠加回屏幕
+   ===================================================================== */
+function volNoise(S) {
+  let sd = 1337; const rnd = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+  const mkG = P => { const g = new Float32Array(P * P * P * 3); for (let i = 0; i < P * P * P; i++) { let x, y, z, l; do { x = rnd() * 2 - 1; y = rnd() * 2 - 1; z = rnd() * 2 - 1; l = x * x + y * y + z * z; } while (l > 1 || l < 0.01); l = Math.sqrt(l); g[i * 3] = x / l; g[i * 3 + 1] = y / l; g[i * 3 + 2] = z / l; } return g; };
+  const mkW = P => { const g = new Float32Array(P * P * P * 3); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
+  const fd = t => t * t * t * (t * (t * 6 - 15) + 10);
+  const G = [mkG(4), mkG(8), mkG(16)], Wp = [mkW(6), mkW(12)];
+  const perlin = (g, P, x, y, z) => {
+    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z), fx = x - ix, fy = y - iy, fz = z - iz;
+    const u = fd(fx), v = fd(fy), w = fd(fz);
+    const c = (dx, dy, dz) => { const k = ((((iz + dz) % P) * P + ((iy + dy) % P)) * P + ((ix + dx) % P)) * 3; return g[k] * (fx - dx) + g[k + 1] * (fy - dy) + g[k + 2] * (fz - dz); };
+    const a = c(0, 0, 0), b = c(0, 1, 0), e = c(0, 0, 1), f = c(0, 1, 1);
+    const x00 = a + (c(1, 0, 0) - a) * u, x10 = b + (c(1, 1, 0) - b) * u, x01 = e + (c(1, 0, 1) - e) * u, x11 = f + (c(1, 1, 1) - f) * u;
+    const y0 = x00 + (x10 - x00) * v, y1 = x01 + (x11 - x01) * v;
+    return y0 + (y1 - y0) * w;
+  };
+  const worley = (g, P, x, y, z) => {
+    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z); let m = 9;
+    for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const k = (((((iz + dz) % P + P) % P) * P + (((iy + dy) % P + P) % P)) * P + (((ix + dx) % P + P) % P)) * 3;
+      const px = ix + dx + g[k] - x, py = iy + dy + g[k + 1] - y, pz = iz + dz + g[k + 2] - z, d = px * px + py * py + pz * pz;
+      if (d < m) m = d;
+    }
+    return Math.sqrt(m);
+  };
+  const data = new Uint8Array(S * S * S * 2), cl = v => Math.min(1, Math.max(0, v));
+  let sum = 0, sum2 = 0, i = 0;
+  for (let z = 0; z < S; z++) for (let y = 0; y < S; y++) for (let x = 0; x < S; x++, i++) {
+    const u = x / S, v = y / S, w = z / S;
+    const pf = perlin(G[0], 4, u * 4, v * 4, w * 4) * 0.5 + perlin(G[1], 8, u * 8, v * 8, w * 8) * 0.3 + perlin(G[2], 16, u * 16, v * 16, w * 16) * 0.2;
+    const w1 = worley(Wp[0], 6, u * 6, v * 6, w * 6), w2 = worley(Wp[1], 12, u * 12, v * 12, w * 12);
+    const r = cl(0.5 + pf * 1.1) * 0.55 + cl(1 - (w1 * 0.65 + w2 * 0.35) * 1.3) * 0.45;
+    data[i * 2] = (r * 255) | 0; data[i * 2 + 1] = (cl(1 - w2 * 1.35) * 255) | 0;
+    sum += r; sum2 += r * r;
+  }
+  const n = S * S * S; VOL.mu = sum / n; VOL.sd = Math.sqrt(Math.max(1e-6, sum2 / n - VOL.mu * VOL.mu));
+  const t = new THREE.Data3DTexture(data, S, S, S);
+  t.format = THREE.RGFormat; t.type = THREE.UnsignedByteType;
+  t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.wrapS = t.wrapT = t.wrapR = THREE.RepeatWrapping;
+  t.generateMipmaps = true; t.unpackAlignment = 1; t.needsUpdate = true;
+  return t;
+}
+const VOL_FS = `
+precision highp float; precision highp sampler3D;
+uniform sampler3D tNoise; uniform sampler2D tDepth;
+uniform sampler2D tPart; uniform float uMode, uPartOn;
+uniform mat4 uInvProj, uCamW;
+uniform vec3 uCam, uSunDir, uSunCol, uAmbLo, uAmbHi, uFogCol, uFlashPos, uFlashCol;
+uniform float uBase, uTop, uThr, uSigma, uTile, uErode, uFar, uMaxD, uNearD, uFade, uFlash, uStep0, uStepR, uLStep, uGain;
+uniform vec2 uWind, uDT;
+varying vec2 vUv;
+float prof(float h){ return smoothstep(0.0,0.10,h)*(1.0-smoothstep(0.5,1.0,h)); }
+float dens(vec3 p, bool detail){
+  float h=(p.y-uBase)/(uTop-uBase);
+  if(h<=0.0||h>=1.0) return 0.0;
+  vec3 q=vec3(p.x-uWind.x,p.y,p.z-uWind.y)/uTile;
+  float dl=1.0-smoothstep(1200.0,3500.0,length(p-uCam));
+  float lod=log2(max((uStep0*(1.0+length(p-uCam)/uStepR))/87.0,1.0));
+  float n=textureLod(tNoise,q,lod).r*0.72+mix(0.5,textureLod(tNoise,q*2.7+vec3(.31,.17,.53),lod).r,dl)*0.28;
+  float d=clamp((n*prof(h)-uThr)*uGain*mix(0.4,1.0,dl),0.0,1.0);
+  if(detail&&d>0.0&&dl>0.0){ float e=texture(tNoise,q*6.3).g; d=clamp((d-(1.0-e)*uErode*dl)/(1.0-uErode*dl),0.0,1.0); }
+  return d;
+}
+float hgn(float c,float g){ float k=1.0+g*g-2.0*g*c; return (1.0-g*g)/(k*sqrt(k)); }
+void main(){
+  vec4 vp=uInvProj*vec4(vUv*2.0-1.0,1.0,1.0); vp/=vp.w;
+  vec3 dv=normalize(vp.xyz);
+  vec3 rd=normalize((uCamW*vec4(dv,0.0)).xyz);
+  float dd=texture(tDepth,vUv).r;
+  float tMax=uMaxD/max(length(rd.xz),0.02);
+  if(dd<0.99999){ float w=exp2(dd*log2(uFar+1.0))-1.0; tMax=min(tMax,w/max(-dv.z,1e-3)); }
+  /* 粒子分层：uMode=0 只画粒子前方的云；uMode=1 只画粒子后方的云(画在粒子下面) */
+  float tPS=-1.0;
+  if(uPartOn>0.5){ float dp=texture(tPart,vUv).r; if(dp<0.99999){ float wp=exp2(dp*log2(uFar+1.0))-1.0; tPS=wp/max(-dv.z,1e-3); } }
+  if(uMode>0.5){ if(tPS<0.0){ gl_FragColor=vec4(0.0); return; } }
+  else if(tPS>=0.0){ tMax=min(tMax,tPS); }
+  float t0,t1;
+  if(abs(rd.y)<1e-4){ if(uCam.y<uBase||uCam.y>uTop){ gl_FragColor=vec4(0.0); return; } t0=0.0; t1=tMax; }
+  else { float ta=(uBase-uCam.y)/rd.y, tb=(uTop-uCam.y)/rd.y; t0=max(min(ta,tb),0.0); t1=min(max(ta,tb),tMax); }
+  if(uMode>0.5) t0=max(t0,tPS);
+  if(t1<=t0){ gl_FragColor=vec4(0.0); return; }
+  float jit=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(0.06711056,0.00583715))));
+  float t=t0+jit*uStep0*(1.0+t0/uStepR), T=1.0; vec3 col=vec3(0.0);
+  float cs=dot(rd,uSunDir);
+  float ph=0.5+0.18*mix(hgn(cs,0.62),hgn(cs,-0.22),0.35);
+  for(int i=0;i<${CLOUD_CFG.STEPS};i++){
+    if(t>=t1||T<0.03) break;
+    float dt=uStep0*(1.0+t/uStepR);
+    vec3 p=uCam+rd*t;
+    float d=dens(p,true);
+    if(d>0.002){
+      float sg=d*uSigma, tau=0.0, ls=uLStep; vec3 lp=p;
+      for(int j=0;j<${CLOUD_CFG.LSTEPS};j++){ lp+=uSunDir*ls; tau+=dens(lp,false)*uSigma*ls; ls*=1.7; }
+      float sunE=exp(-tau)+0.35*exp(-tau*0.22);
+      float h=clamp((p.y-uBase)/(uTop-uBase),0.0,1.0);
+      vec3 S=uSunCol*sunE*ph+mix(uAmbLo,uAmbHi,h);
+      if(uFlash>0.001) S+=uFlashCol*uFlash*exp(-length(p-uFlashPos)*0.0035)*2.5;
+      float a=1.0-exp(-sg*dt);
+      col+=T*S*a; T*=1.0-a;
+    }
+    t+=dt;
+  }
+  float al=1.0-T;
+  float fr=clamp(1.0-exp(-t0/uFade),0.0,1.0)*0.9;
+  float far=1.0-smoothstep(uNearD,uMaxD,t0*length(rd.xz));
+  col=mix(col,uFogCol*al,fr)*far; al*=far;
+  gl_FragColor=vec4(col,al);
+}`;
+const VOL_COMP_FS = `
+uniform sampler2D tCloud, tDepth, tMask; uniform vec2 uCS; uniform float uFar; varying vec2 vUv;
+float lin(float d){ return exp2(d*log2(uFar+1.0))-1.0; }
+void main(){
+  /* 深度感知上采样：只混合深度相近的云像素，物体边缘不会渗进远处云的蓝边 */
+  float d0=lin(texture2D(tDepth,vUv).r);
+  vec2 f=vUv/uCS-0.5, i0=floor(f), fr=f-i0;
+  vec4 c=vec4(0.0); float ws=0.0;
+  for(int j=0;j<2;j++) for(int i=0;i<2;i++){
+    vec2 o=vec2(float(i),float(j)), bw=mix(1.0-fr,fr,o);
+    vec2 uv=(i0+o+0.5)*uCS;
+    float di=lin(texture2D(tDepth,uv).r);
+    float w=bw.x*bw.y+1e-5;
+    c+=texture2D(tCloud,uv)*w; ws+=w;
+  }
+  c/=ws; c*=1.0-texture2D(tMask,vUv).r;
+  gl_FragColor=vec4(c.a>1e-4?c.rgb/c.a:vec3(0.0),1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  gl_FragColor=vec4(gl_FragColor.rgb*c.a,c.a);
+}`;
+function volInit() {
+  VOL.noise = volNoise(CLOUD_CFG.TEX);
+  VOL.depthMat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+  const V3 = () => ({ value: new THREE.Vector3() });
+  VOL.mat = fxMat(VOL_FS, {
+    tNoise: { value: VOL.noise }, tDepth: { value: null }, uInvProj: { value: new THREE.Matrix4() }, uCamW: { value: new THREE.Matrix4() },
+    uCam: V3(), uSunDir: V3(), uSunCol: V3(), uAmbLo: V3(), uAmbHi: V3(), uFogCol: V3(), uFlashPos: V3(), uFlashCol: { value: new THREE.Vector3(0.75, 0.82, 1.0) },
+    uBase: { value: 1100 }, uTop: { value: 1900 }, uThr: { value: 0.7 }, uSigma: { value: CLOUD_CFG.SIGMA }, uTile: { value: CLOUD_CFG.TILE }, uErode: { value: CLOUD_CFG.ERODE },
+    uFar: { value: 16000 }, uMaxD: { value: CLOUD_CFG.MAXDIST }, uNearD: { value: CLOUD_CFG.VOL_NEAR }, uDT: { value: new THREE.Vector2() }, uFade: { value: CLOUD_CFG.FADE }, uFlash: { value: 0 },
+    uStep0: { value: CLOUD_CFG.STEP0 }, uStepR: { value: CLOUD_CFG.STEP_RANGE }, uLStep: { value: CLOUD_CFG.LSTEP0 }, uGain: { value: CLOUD_CFG.GAIN_D }, uWind: { value: new THREE.Vector2() },
+    tPart: { value: null }, uMode: { value: 0 }, uPartOn: { value: 0 }
+  });
+  VOL.comp = new THREE.ShaderMaterial({
+    vertexShader: FX_VS, fragmentShader: VOL_COMP_FS, uniforms: { tCloud: { value: null }, tDepth: { value: null }, tMask: { value: null }, uCS: { value: new THREE.Vector2(0.001, 0.001) }, uFar: { value: 16000 } },
+    depthTest: false, depthWrite: false, transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor
+  });
+}
+function volResize(w, h) {
+  if (VOL.depthRT) { VOL.depthRT.depthTexture.dispose(); VOL.depthRT.dispose(); VOL.cloudRT.dispose(); }
+  if (VOL.partRT) { VOL.partRT.depthTexture.dispose(); VOL.partRT.dispose(); VOL.behindRT.dispose(); }
+  renderer.getDrawingBufferSize(_volV2); const fw = Math.max(2, _volV2.x | 0), fh = Math.max(2, _volV2.y | 0);
+  const dt = new THREE.DepthTexture(fw, fh); dt.minFilter = dt.magFilter = THREE.NearestFilter;
+  VOL.depthRT = new THREE.WebGLRenderTarget(fw, fh, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true, depthTexture: dt });
+  VOL.cloudRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  const dt2 = new THREE.DepthTexture(fw, fh); dt2.minFilter = dt2.magFilter = THREE.NearestFilter;
+  VOL.partRT = new THREE.WebGLRenderTarget(fw, fh, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true, depthTexture: dt2 });
+  VOL.behindRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  VOL.w = w; VOL.h = h;
+}
+function volScan() {
+  const l = [];
+  scene.traverse(o => {
+    if (o === scene) return;
+    let bad = o.isPoints || o.isSprite || o.isLine;
+    if (!bad && o.isMesh) { const ms = Array.isArray(o.material) ? o.material : [o.material]; bad = ms.some(m => !m || m.isShaderMaterial || (m.transparent && m.opacity < 0.9) || m.depthWrite === false || m.colorWrite === false); }
+    const ms2 = o.isMesh ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+    const vg = ms2.some(m => m && ((m.transparent && m.opacity < 0.9) || /glass|canopy|windshield|玻璃|挡风/i.test(m.name || '')));
+    o.userData.vg = vg;
+    if (bad || vg) l.push(o);
+    /* 近处(<100m)小物体：实心→遮罩层5(云永远在其下方)；玻璃/透明→层6(云之后再画一遍) */
+    if (o.isLight) { o.layers.enable(5); o.layers.enable(6); }
+    else if (o.isMesh && o.geometry) {
+      const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+      const e = o.matrixWorld.elements, dx = e[12] - camera.position.x, dy = e[13] - camera.position.y, dz = e[14] - camera.position.z;
+      const sc = Math.max(Math.hypot(e[0], e[1], e[2]), Math.hypot(e[4], e[5], e[6]), Math.hypot(e[8], e[9], e[10]));
+      const near = !!g.boundingSphere && g.boundingSphere.radius * sc < 40 && dx * dx + dy * dy + dz * dz < 10000;
+      if (near && !vg) o.layers.enable(5); else o.layers.disable(5);
+      if (near && vg) o.layers.enable(6); else o.layers.disable(6);
+      o.userData.vn = near && vg;
+    }
+  });
+  VOL.hide = l;
+}
+const _volV2 = new THREE.Vector2(), _volP = new THREE.Vector3();
+const _volDec = (c, k, o) => o.set(Math.pow(Math.max(c.r, 0), 2.2) * k, Math.pow(Math.max(c.g, 0), 2.2) * k, Math.pow(Math.max(c.b, 0), 2.2) * k);
+const volGlassMat = m => !!m && ((m.transparent && m.opacity < 0.9) || /glass|canopy|windshield|玻璃|挡风/i.test(m.name || ''));
+function volPre() {
+  if (FX.hasParticles()) FX.setHidden(true);   /* 粒子改在云之后单独绘制 */
+  /* 玻璃材质在主渲染里只关闭颜色/深度写入（物体仍可见，机身影子不受影响），云画完后再整体补画 */
+  VOL.gl.length = 0; if (!VOL.gmap) VOL.gmap = new Map(); VOL.gmap.clear();
+  if (camera.position.y < WATER_Y + 2) return;
+  for (const o of VOL.hide) if (o.userData.vn && o.visible && o.matrixWorld.elements[13] > WATER_Y + 3) {
+    VOL.gl.push(o);
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (volGlassMat(m) && !VOL.gmap.has(m)) { VOL.gmap.set(m, [m.colorWrite, m.depthWrite]); m.colorWrite = false; m.depthWrite = false; }
+  }
+}
+function volRestoreGlass() { if (!VOL.gmap) return; for (const [m, f] of VOL.gmap) { m.colorWrite = f[0]; m.depthWrite = f[1]; } VOL.gmap.clear(); }
+function volDraw() {
+  const ac = renderer.autoClear, sm = renderer.shadowMap, smA = sm.autoUpdate, bg = scene.background;
+  const hid = [];
+  try {
+    if (!VOL.mat) volInit();
+    renderer.getDrawingBufferSize(_volV2);
+    const w = Math.max(2, (_volV2.x * CLOUD_CFG.RES) | 0), h = Math.max(2, (_volV2.y * CLOUD_CFG.RES) | 0);
+    if (w !== VOL.w || h !== VOL.h) volResize(w, h);
+    if ((VOL.scan++ % 45) === 0) volScan();
+    /* 天气 → 云底/云顶/覆盖/浓度 */
+    const v = WX.v, tk = clamp(v.cloud * 0.45 + v.dark * 0.75, 0, 1);
+    VOL.base = lerp(CLOUD_CFG.BASE_CLEAR, CLOUD_CFG.BASE_STORM, tk); VOL.top = lerp(CLOUD_CFG.TOP_CLEAR, CLOUD_CFG.TOP_STORM, tk);
+    const u = VOL.mat.uniforms;
+    u.uBase.value = VOL.base; u.uTop.value = VOL.top;
+    u.uThr.value = VOL.mu + VOL.sd * 0.77 * cfgInterp(CLOUD_CFG.Z, v.cloud);
+    u.uSigma.value = CLOUD_CFG.SIGMA * (1 + v.dark * 0.8);
+    u.uWind.value.set(WX.cx, WX.cz);
+    camera.updateMatrixWorld();
+    u.uInvProj.value.copy(camera.projectionMatrixInverse); u.uCamW.value.copy(camera.matrixWorld);
+    u.uCam.value.setFromMatrixPosition(camera.matrixWorld); u.uFar.value = camera.far;
+    u.uSunDir.value.copy(sunDirVec).normalize();
+    const sunI = clamp(sunElev * 4, 0, 1) * 1.7 * (1 - 0.82 * v.dark);
+    u.uSunCol.value.set(sun.color.r * sunI, sun.color.g * sunI, sun.color.b * sunI);
+    _volDec(skyUniforms.uMid.value, 1.15, u.uAmbHi.value); _volDec(skyUniforms.uBottom.value, 0.55, u.uAmbLo.value);
+    _volDec(skyUniforms.uHz.value, 1.0, u.uFogCol.value);
+    u.uFlash.value = LTN.S.flash; u.uFlashPos.value.copy(LTN.S.pos);
+    /* 1) 深度预渲染：隐藏透明/粒子/自定义shader物体，不更新阴影 */
+    const cp = u.uCam.value;
+    for (const o of VOL.hide) if (o.visible) {
+      /* 4~80米内的物体(自己的机体、尾桨等)一律写入深度，云永远在它们下面；<4米(座舱玻璃)与远处透明物仍忽略 */
+      const e = o.matrixWorld.elements, dx = e[12] - cp.x, dy = e[13] - cp.y, dz = e[14] - cp.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= 0) { o.visible = false; hid.push(o); }
+    }
+    sm.autoUpdate = false; renderer.autoClear = true; scene.background = null; scene.overrideMaterial = VOL.depthMat;
+    renderer.setRenderTarget(VOL.depthRT); _fxOrigRender(scene, camera);
+    scene.overrideMaterial = null; scene.background = bg; sm.autoUpdate = smA;
+    for (const o of hid) o.visible = true; hid.length = 0;
+    /* 1.2) 火焰/烟雾/曳光/火花/爆炸：深度写入独立的 partRT，云以粒子深度为界分前/后两段 */
+    const partOn = FX.hasParticles();
+    u.uPartOn.value = partOn ? 1 : 0;
+    if (partOn) {
+      const lm = camera.layers.mask;
+      try {
+        FX.partDepth(true, VOL_CFG.partCut); FX.setHidden(false);
+        camera.layers.set(7); renderer.autoClear = true; scene.background = null; sm.autoUpdate = false;
+        renderer.setRenderTarget(VOL.partRT); _fxOrigRender(scene, camera);
+      } finally { FX.partDepth(false); FX.setHidden(true); camera.layers.mask = lm; scene.background = bg; sm.autoUpdate = smA; }
+      u.tPart.value = VOL.partRT.depthTexture;
+    }
+    /* 1.5) 近处实心物体遮罩(层5)：云永远画在它们下方 */
+    if (!VOL.maskMat) VOL.maskMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false, toneMapped: false, side: THREE.DoubleSide });
+    if (!VOL.maskRT || VOL.maskRT.width !== VOL.depthRT.width || VOL.maskRT.height !== VOL.depthRT.height) { if (VOL.maskRT) VOL.maskRT.dispose(); VOL.maskRT = new THREE.WebGLRenderTarget(VOL.depthRT.width, VOL.depthRT.height, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter }); }
+    {
+      const cc = new THREE.Color(), ca = renderer.getClearAlpha(), lm = camera.layers.mask; renderer.getClearColor(cc); renderer.setClearColor(0x000000, 1);
+      camera.layers.set(5); scene.background = null; scene.overrideMaterial = VOL.maskMat; renderer.autoClear = true; sm.autoUpdate = false;
+      renderer.setRenderTarget(VOL.maskRT); _fxOrigRender(scene, camera);
+      scene.overrideMaterial = null; scene.background = bg; camera.layers.mask = lm; renderer.setClearColor(cc, ca); sm.autoUpdate = smA;
+    }
+    /* 2) 云 raymarch（半分辨率） */
+    u.tDepth.value = VOL.depthRT.depthTexture; u.uDT.value.set(1 / VOL.depthRT.width, 1 / VOL.depthRT.height);
+    fxQuad.material = VOL.mat;
+    if (partOn) { u.uMode.value = 1; renderer.setRenderTarget(VOL.behindRT); _fxOrigRender(fxScene, fxCam); }   /* 粒子后方的云 */
+    u.uMode.value = 0; renderer.setRenderTarget(VOL.cloudRT); _fxOrigRender(fxScene, fxCam);                    /* 粒子前方(或无粒子处)的云 */
+    /* 3) 叠加回屏幕（预乘 alpha） */
+    VOL.comp.uniforms.tCloud.value = VOL.cloudRT.texture; VOL.comp.uniforms.tDepth.value = VOL.depthRT.depthTexture; VOL.comp.uniforms.tMask.value = VOL.maskRT.texture;
+    VOL.comp.uniforms.uCS.value.set(1 / VOL.cloudRT.width, 1 / VOL.cloudRT.height); VOL.comp.uniforms.uFar.value = camera.far; fxQuad.material = VOL.comp;
+    renderer.autoClear = false; renderer.setRenderTarget(null);
+    if (partOn) {
+      VOL.comp.uniforms.tCloud.value = VOL.behindRT.texture; _fxOrigRender(fxScene, fxCam);   /* ① 粒子后方的云(在粒子下面) */
+      FX.setHidden(false); const lm7 = camera.layers.mask; camera.layers.set(7); scene.background = null; sm.autoUpdate = false;
+      _fxOrigRender(scene, camera);                                                          /* ② 画粒子 */
+      camera.layers.mask = lm7; scene.background = bg; sm.autoUpdate = smA;
+      VOL.comp.uniforms.tCloud.value = VOL.cloudRT.texture;
+    }
+    _fxOrigRender(fxScene, fxCam);                                                           /* ③ 粒子前方的云(在粒子上面) */
+    /* 3.5) 近处玻璃/透明件在云之后再画一遍，保证它们在云的上层 */
+    volRestoreGlass();
+    if (VOL.gl.length) { const lm = camera.layers.mask; camera.layers.set(6); scene.background = null; sm.autoUpdate = false; _fxOrigRender(scene, camera); camera.layers.mask = lm; scene.background = bg; sm.autoUpdate = smA; }
+    VOL.gl.length = 0;
+  } catch (e) {
+    VOL.broken = true; scene.overrideMaterial = null; scene.background = bg; sm.autoUpdate = smA;
+    for (const o of hid) o.visible = true;
+    volRestoreGlass(); VOL.gl.length = 0; renderer.setRenderTarget(null); if (window.console) console.error('[体积云] 失败，已回退平面云', e);
+  }
+  renderer.autoClear = ac;
+}
+
 function renderFX() {
   fxUpdateMoon();
+  const _vo = volOn() && settings.clouds; if (_vo) volPre();
   renderer.render(scene, camera);
+  if (_vo) volDraw();
+  FX.setHidden(false);   /* 保险：无论体积云是否成功，粒子必须恢复可见 */
   if (!fxActive()) return;
   const prevAuto = renderer.autoClear;
   try {
@@ -8820,6 +9459,7 @@ function loop(now) {
   if (inMenu || hangarOpen) return;
   if (paused) {
     if (freecamActive) updateFreecam(dt);
+    updateDayNight(0);   /* 暂停(设置面板打开)时也刷新天空与时间，拖时间滑轨才有实时效果 */
     renderFX();
     return;
   }
@@ -8871,6 +9511,7 @@ if (!inMenu) {
     FX.emitForCraft(dt, c, c.model ? c.model.fuselage : null);
   }
   if (MP.remoteCraft) FX.emitForCraft(dt, MP.remoteCraft, MP.remoteModel ? MP.remoteModel.fuselage : null);
+  LTN.update(dt);
   FX.step(dt);
 }
 
@@ -8969,6 +9610,78 @@ setTimeout(tryAutoPlayBGM, 450);
       btn.classList.toggle("on", btn.dataset.v === v);
     });
   });
+})();
+
+
+/* ===== 时间控制：拖动循环滑轨 / 同步现实时间 / 自定义一天时长 ===== */
+function timeUIRefresh() {
+  const clk = document.getElementById('tcClock'); if (!clk) return;
+  const s = Math.floor(((dayTime % 1) + 1) % 1 * 86400) % 86400;
+  if (timeUIRefresh._s === s) return; timeUIRefresh._s = s;
+  const p = n => (n < 10 ? '0' : '') + n;
+  clk.textContent = p(Math.floor(s / 3600)) + ':' + p(Math.floor(s / 60) % 60) + ':' + p(s % 60);
+  document.getElementById('tcThumb').style.left = (s / 864) + '%';
+}
+(function () {
+  const $ = id => document.getElementById(id);
+  const trk = $('tcTrack'); if (!trk) return;
+  const save = () => { try { localStorage.setItem('heli2026_settings', JSON.stringify(settings)); } catch (e) {} };
+  const wrap = v => ((v % 1) + 1) % 1;
+  const fmtLen = sec => {
+    if (sec < 3600) return (Math.round(sec / 6) / 10) + ' 分钟';
+    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    return h + ' 小时' + (m ? ' ' + m + ' 分' : '');
+  };
+  const syncTgl = () => { const t = document.querySelector('.tgl[data-key="syncReal"]'); if (t) t.classList.toggle('on', !!settings.syncReal); };
+  const lenUI = () => {
+    const sec = clamp(+settings.dayLenSec || TIME_CFG.defDaySec, TIME_CFG.minDaySec, TIME_CFG.maxDaySec);
+    settings.dayLenSec = sec;
+    const u = $('tcLenUnit').value;
+    $('tcLenNum').value = +(u === 'h' ? sec / 3600 : sec / 60).toFixed(2);
+    $('tcLenSl').value = Math.round(1000 * Math.log(sec / TIME_CFG.minDaySec) / Math.log(TIME_CFG.maxDaySec / TIME_CFG.minDaySec));
+    $('tcLenTxt').textContent = settings.syncReal ? '同步现实时间中，此项暂不生效' : '现实 ' + fmtLen(sec) + ' = 游戏 1 天（1 分钟 ~ 24 小时）';
+    $('dayLenHint').textContent = settings.syncReal ? '同步现实时间（24 小时一天）' : '约 ' + fmtLen(sec) + ' 一个完整昼夜';
+    $('tcLenRow').style.opacity = settings.syncReal ? 0.45 : 1;
+  };
+  const tzUI = () => {
+    let tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+    $('tcTz').textContent = '跟随系统时区' + (tz ? '：' + tz : '') + ' · 24 小时一天';
+  };
+  const leaveSync = () => {
+    if (settings.syncReal) { settings.syncReal = false; syncTgl(); lenUI(); }
+    if (settings.timeOfDay !== 'auto') {            /* 固定时段 → 手动：停在拖到的位置 */
+      settings.timeOfDay = 'manual';
+      document.querySelectorAll('.seg[data-key="timeOfDay"] button').forEach(b => b.classList.remove('on'));
+    }
+  };
+  /* 1) 拖动滑轨：相对拖动，不限边界，首尾循环 */
+  let drag = null;
+  trk.addEventListener('pointerdown', e => {
+    drag = { x: e.clientX, t: dayTime }; timeDragging = true; leaveSync();
+    try { trk.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  trk.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const w = trk.clientWidth || 200;
+    dayTime = wrap(drag.t + (e.clientX - drag.x) / w * TIME_CFG.dragHoursPerTrack / 24);
+    timeUIRefresh();
+  });
+  const end = () => { if (!drag) return; drag = null; timeDragging = false; settings.dayTime0 = dayTime; save(); };
+  trk.addEventListener('pointerup', end); trk.addEventListener('pointercancel', end);
+  /* 2) 同步现实时间（通用 .tgl 处理器已改 settings 并 applySettings，这里补存档与界面） */
+  const tg = document.querySelector('.tgl[data-key="syncReal"]');
+  tg.addEventListener('click', () => { lenUI(); save(); });
+  /* 点预设时段 → 自动退出同步 */
+  const seg = document.querySelector('.seg[data-key="timeOfDay"]');
+  seg.addEventListener('click', () => { if (settings.syncReal) { settings.syncReal = false; syncTgl(); lenUI(); applySettings(); save(); } });
+  /* 3) 一天时长 */
+  const setLen = sec => { settings.dayLenSec = clamp(Math.round(sec), TIME_CFG.minDaySec, TIME_CFG.maxDaySec); lenUI(); save(); };
+  $('tcLenSl').addEventListener('input', e => setLen(TIME_CFG.minDaySec * Math.pow(TIME_CFG.maxDaySec / TIME_CFG.minDaySec, +e.target.value / 1000)));
+  $('tcLenNum').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) setLen(v * ($('tcLenUnit').value === 'h' ? 3600 : 60)); else lenUI(); });
+  $('tcLenUnit').addEventListener('change', lenUI);
+  /* 初始化 */
+  if (typeof settings.dayTime0 === 'number' && !settings.syncReal && (settings.timeOfDay === 'manual' || settings.timeOfDay === 'auto')) dayTime = wrap(settings.dayTime0);
+  syncTgl(); tzUI(); lenUI();
 })();
 
 buildHangarList();
@@ -9651,6 +10364,7 @@ if (window.__HELI) window.__HELI.ready();
    ===================================================================== */
 const MS_CFG = {
   SAVE_KEY: 'heli2026_missions',
+  CHEAT_UNLOCK_ALL: false, // 作弊：true=所有任务视为已完成（全机型、全设置解锁）；测试完想恢复正常就改成 false
   CLIMB_ALT: 500,        // 爬升目标：高出停机坪的米数
   RING_R: 35,            // 绿环半径(米)
   RING_TUBE: 2.6,        // 环的粗细
@@ -9685,7 +10399,8 @@ const MS = window.__MS = {
   mode: 'sandbox', active: null, st: null, saved: null, pending: null, sel: 'm1', from: 'mode', done: {}
 };
 try { MS.done = (JSON.parse(localStorage.getItem(MS_CFG.SAVE_KEY) || '{}') || {}).done || {}; } catch (e) { MS.done = {}; }
-MS.save = () => { try { localStorage.setItem(MS_CFG.SAVE_KEY, JSON.stringify({ done: MS.done })); } catch (e) {} };
+if (MS_CFG.CHEAT_UNLOCK_ALL) for (const k in MISSIONS) MS.done[k] = true;
+MS.save = () => { if (MS_CFG.CHEAT_UNLOCK_ALL) return; try { localStorage.setItem(MS_CFG.SAVE_KEY, JSON.stringify({ done: MS.done })); } catch (e) {} };
 MS.avail = id => MISSIONS[id].pre.every(p => MS.done[p]);
 MS.isLocked = aid => (aid === 'y407' && !MS.done.m3) || (aid === 'y407M' && !MS.done.m4);
 MS.inMission = () => MS.mode === 'mission' && !!MS.active;
@@ -9748,7 +10463,7 @@ MS.inMission = () => MS.mode === 'mission' && !!MS.active;
     <button class="ms-small" id="msm-back" style="margin-top:18px;">返 回</button>
   </div>
   <div id="ms-page" class="ms-ov">
-    <div class="msp-top"><span>任 务</span><button class="ms-small" id="msp-back">返 回</button></div>
+    <div class="msp-top"><span id="msp-title">任 务</span><button class="ms-small" id="msp-back">返 回</button></div>
     <div id="ms-map"></div>
     <div class="msp-info"><div><b id="msp-name"></b><br><span id="msp-desc"></span><br><span id="msp-rw" style="color:#7fe9a8;"></span></div>
     <button class="ms-small" id="msp-go">开始任务</button></div>
@@ -9830,6 +10545,34 @@ MS.renderPage = function () {
   go.textContent = ok ? (MS.done[m.id] ? '再次挑战' : '开始任务') : '需先完成：' + m.pre.filter(p => !MS.done[p]).map(p => MISSIONS[p].name).join('、');
 };
 $ms('msp-back').onclick = () => { msShow('ms-page', false); if (MS.from === 'mode') MS.showModeSelect(); };
+/* 作弊：快速连点两次左上角「任务」→ 弹窗输入 114514 → 全部任务标记为完成并写入存档（不可关闭） */
+{
+  const CHEAT_CODE = '114514';
+  let lastTap = 0;
+  const openCheat = () => {
+    if (document.getElementById('ms-cheat')) return;
+    const d = document.createElement('div'); d.id = 'ms-cheat'; d.className = 'ms-ov show'; d.style.zIndex = 400;
+    d.innerHTML = '<div style="background:rgba(10,24,36,.97);border:1px solid rgba(100,190,220,.5);padding:20px 22px;text-align:center;">' +
+      '<div style="font-size:14px;letter-spacing:3px;margin-bottom:12px;">请输入作弊码</div>' +
+      '<input id="ms-cheat-in" type="text" inputmode="numeric" autocomplete="off" style="width:180px;padding:8px;font-size:18px;text-align:center;background:#06121c;color:#eafaff;border:1px solid rgba(100,190,220,.5);outline:none;">' +
+      '<div style="margin-top:14px;"><button class="ms-small" id="ms-cheat-ok">确定</button><button class="ms-small" id="ms-cheat-no">取消</button></div></div>';
+    document.body.appendChild(d);
+    const inp = d.querySelector('#ms-cheat-in'); setTimeout(() => inp.focus(), 50);
+    const close = () => d.remove();
+    d.querySelector('#ms-cheat-no').onclick = close;
+    d.querySelector('#ms-cheat-ok').onclick = () => {
+      if (inp.value.trim() === CHEAT_CODE) {
+        for (const k in MISSIONS) MS.done[k] = true;
+        MS.save(); MS.renderPage(); MS.applyBody(); close();
+        toast('作弊已开启：全部任务已完成', 2);
+      } else { inp.value = ''; inp.style.borderColor = '#e55'; }
+    };
+  };
+  $ms('msp-title').addEventListener('pointerdown', () => {
+    const now = performance.now();
+    if (now - lastTap < 400) { lastTap = 0; openCheat(); } else lastTap = now;
+  });
+}
 $ms('msp-go').onclick = () => {
   if (!MS.avail(MS.sel)) return;
   msShow('ms-page', false);
@@ -9930,7 +10673,7 @@ MS.cleanup = function () {
   MS.applyBody();
   if (MS.isLocked(aircraftId)) setAircraft('y206');
 };
-MS.quit = function () { MS.cleanup(); backToMainMenu(); MS.openPage('exit'); };
+MS.quit = function () { MS._mm = true; try { MS.cleanup(); backToMainMenu(); MS.openPage('exit'); } finally { MS._mm = false; } };
 $ms('ms-retry').onclick = () => { closePause(); MS.launch(MS.active); };
 $ms('ms-quit').onclick = () => { closePause(); MS.quit(); };
 $ms('msr-retry').onclick = () => MS.launch(MS.active);
